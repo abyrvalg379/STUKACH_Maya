@@ -271,6 +271,7 @@ class MayaCheck:
     _val_queue: List[str] = []                  # progressive validation queue
     _wanted_flags: dict = {}                    # snapshot expensive-flag switches
     _next_issue_ptr: int = 0                    # cycling index for next_issue()
+    _stukach_selection: set = set()             # components selected via Sel buttons
     _job_ids: List[int] = []
     _running: bool = False
     _ui_callback = None   # callable() -> triggers UI refresh
@@ -297,6 +298,7 @@ class MayaCheck:
     def stop(cls) -> None:
         cls._running = False
         cls._val_queue = []
+        cls._clear_stukach_selection()
         cls._remove_jobs()
         cls.objects.clear()
         _overlay.clear()
@@ -308,10 +310,62 @@ class MayaCheck:
             for mco in cls.objects.values():
                 mco.enabled[key] = enabled
                 mco.snapshot = None   # snapshot contents depend on enabled set
+            if not enabled:
+                cls._deselect_check(key)
         else:
             cls._enabled_checks[key] = enabled
             for mco in cls.objects.values():
                 mco.enabled[key] = enabled
+
+    # ── viewport selection made by STUKACH (Sel buttons / next issue) ────────
+
+    @staticmethod
+    def _comp_key(comp: str):
+        """Canonical component key: (node short name, kind, index).
+        Selection queries return transform-based paths while checkers store
+        shape-based ones — string comparison between them never matches."""
+        import re
+        m = re.search(r"\.(f|e|vtx)\[(\d+)\]$", comp)
+        if not m:
+            return comp
+        node = comp[:m.start()].split("|")[-1].split(".")[0]
+        node = re.sub(r"Shape$", "", node)   # transform path vs shape path
+        return (node, m.group(1), int(m.group(2)))
+
+    @classmethod
+    def note_stukach_selection(cls, components) -> None:
+        cls._stukach_selection = {cls._comp_key(c) for c in (components or [])}
+
+    @classmethod
+    def _deselect_check(cls, key: str) -> None:
+        """Deselect viewport components belonging to a now-disabled check.
+        Only touches the selection if it is (a subset of) ours."""
+        try:
+            sel = cmds.ls(selection=True, long=True, flatten=True) or []
+        except Exception:
+            return
+        bad = set()
+        for mco in cls.objects.values():
+            checker = mco.checkers.get(key)
+            if checker:
+                bad |= {cls._comp_key(c)
+                        for c in (getattr(checker, "bad_components", []) or [])}
+        sel_keys = {cls._comp_key(c) for c in sel}
+        if sel_keys and bad and sel_keys <= (cls._stukach_selection | bad):
+            cmds.select(clear=True)
+        cls._stukach_selection -= bad
+
+    @classmethod
+    def _clear_stukach_selection(cls) -> None:
+        """On stop: clear the viewport selection if STUKACH made it."""
+        try:
+            sel = cmds.ls(selection=True, long=True, flatten=True) or []
+            sel_keys = {cls._comp_key(c) for c in sel}
+            if sel and cls._stukach_selection and sel_keys <= cls._stukach_selection:
+                cmds.select(clear=True)
+        except Exception:
+            pass
+        cls._stukach_selection = set()
 
     # ── batch operations (single run_all for the whole set) ───────────────────
 
@@ -333,6 +387,9 @@ class MayaCheck:
             # snapshot contents depend on the enabled set (want_* flags)
             for mco in cls.objects.values():
                 mco.snapshot = None
+            if cls._running and not any(
+                    cls._enabled_checks.values()):
+                cls._clear_stukach_selection()
         if run and cls._running:
             cls.run_all()
         cls._notify_ui()

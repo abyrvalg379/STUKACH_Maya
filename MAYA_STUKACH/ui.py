@@ -809,6 +809,8 @@ class _DetailCheckRow(QtWidgets.QWidget):
             checker = mco.checkers.get(self._key)
             if checker and checker.bad_components:
                 checker.select()
+                _manager.MayaCheck.note_stukach_selection(
+                    checker.bad_components)
                 try:
                     # focus: frame the bad components (Blender's view_selected)
                     cmds.viewFit(checker.bad_components)
