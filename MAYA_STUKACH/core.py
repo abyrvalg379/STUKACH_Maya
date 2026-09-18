@@ -2041,6 +2041,153 @@ class UnusedData(BaseCheck):
                 self.metric_text += f" +{len(issues)-5}"
 
 
+# ─── SNAPSHOT-DRIVEN CHECKS (reference: modelChecker, Weta) ───────────────────
+#
+# These consume a MeshSnapshot built ONCE per mesh (see snapshot.py) instead of
+# re-iterating the mesh per check. bad_components use Maya component strings
+# ("shape.f[3]", "shape.e[5]") so Sel + viewport overlay work as usual.
+
+
+class SnapshotCheck(BaseCheck):
+    """Base for checks that run against a MeshSnapshot."""
+
+    def run(self, dag_path, ctx=None):
+        snap = ctx.get("snapshot") if ctx else None
+        if snap is None:
+            return
+        self.reset()
+        self.run_snapshot(snap)
+
+    def run_snapshot(self, snap):
+        raise NotImplementedError
+
+
+class HardEdges(SnapshotCheck):
+    """Non-smooth, non-boundary edges (component mode 'soft/hard' display)."""
+    severity = "WARNING"
+
+    def run_snapshot(self, snap):
+        bad = [
+            snap.shape + ".e[%d]" % i
+            for i, (smooth, conn) in enumerate(zip(snap.edge_smooth, snap.edge_conn))
+            if smooth is False and conn > 1
+        ]
+        self._count = len(bad)
+        self._bad_components = bad
+
+
+class Lamina(SnapshotCheck):
+    """Lamina faces — zero-thickness geometry folded onto itself."""
+    severity = "BLOCKER"
+
+    def run_snapshot(self, snap):
+        bad = [
+            snap.shape + ".f[%d]" % i
+            for i, is_lamina in enumerate(snap.face_lamina) if is_lamina
+        ]
+        self._count = len(bad)
+        self._bad_components = bad
+
+
+class ZeroLengthEdges(SnapshotCheck):
+    """Edges of (near-)zero length — degenerate geometry."""
+    severity = "BLOCKER"
+    _TOL = 1e-8
+
+    def run_snapshot(self, snap):
+        bad = []
+        pts = snap.points
+        for i, (v0, v1) in enumerate(snap.edges):
+            a, b = pts[v0], pts[v1]
+            d = ((a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2) ** 0.5
+            if d <= self._TOL:
+                bad.append(snap.shape + ".e[%d]" % i)
+        self._count = len(bad)
+        self._bad_components = bad
+
+
+class Starlike(SnapshotCheck):
+    """Non-starlike faces — polygon outline self-intersects."""
+    severity = "WARNING"
+
+    def run_snapshot(self, snap):
+        bad = [
+            snap.shape + ".f[%d]" % i
+            for i, st in enumerate(snap.face_starlike) if st is False
+        ]
+        self._count = len(bad)
+        self._bad_components = bad
+
+
+class MissingUVs(SnapshotCheck):
+    """Faces with no UV mapping at all."""
+    severity = "WARNING"
+
+    def run_snapshot(self, snap):
+        bad = [
+            snap.shape + ".f[%d]" % i
+            for i, uvs in enumerate(snap.face_uvs) if uvs is None
+        ]
+        self._count = len(bad)
+        self._bad_components = bad
+
+
+class DuplicatedNames(SnapshotCheck):
+    """Short names used by more than one node in the scene (FBX/AYON killers)."""
+    severity = "BLOCKER"
+
+    def run_snapshot(self, snap):
+        n = snap.scene.get("short_names", {}).get(snap.short_name, 0)
+        if n > 1:
+            self._count = 1
+            self.metric_text = "'%s' used by %d nodes" % (snap.short_name, n)
+        else:
+            self._count = 0
+
+
+class ShapeNames(SnapshotCheck):
+    """Shape node must be named '<transform>Shape'."""
+    severity = "WARNING"
+
+    def run_snapshot(self, snap):
+        if snap.shape_short != snap.short_name + "Shape":
+            self._count = 1
+            self.metric_text = "shape '%s' != '%sShape'" % (
+                snap.shape_short, snap.short_name)
+
+
+class TrailingNumbers(SnapshotCheck):
+    """Transform name ends with digits (pCube1-style leftovers)."""
+    severity = "WARNING"
+
+    def run_snapshot(self, snap):
+        name = snap.short_name.split(":")[-1]
+        if name and name[-1].isdigit():
+            self._count = 1
+            self.metric_text = "trailing digits in '%s'" % snap.short_name
+
+
+class UncenteredPivots(SnapshotCheck):
+    """Rotate pivot not at world origin."""
+    severity = "WARNING"
+
+    def run_snapshot(self, snap):
+        rp = snap.rotate_pivot
+        if any(abs(v) > 1e-6 for v in rp):
+            self._count = 1
+            self.metric_text = "pivot (%.3f, %.3f, %.3f)" % rp
+
+
+class ParentGeometry(SnapshotCheck):
+    """Mesh parented under another mesh — breaks export hierarchies."""
+    severity = "WARNING"
+
+    def run_snapshot(self, snap):
+        if "mesh" in snap.parent_types:
+            self._count = 1
+            self.metric_text = "parented under a mesh"
+
+
 # ─── CHECK_TYPES — maps key → class ──────────────────────────────────────────
 
 CHECK_TYPES: dict = {
@@ -2086,20 +2233,36 @@ CHECK_TYPES: dict = {
     "mat_assignment":       MatAssignment,
     "missing_textures":     MissingTextures,
     # CLEANUP
+    "missing_textures":     MissingTextures,
     "unused_data":          UnusedData,
+    # SNAPSHOT-DRIVEN (modelChecker reference)
+    "hard_edges":           HardEdges,
+    "lamina":               Lamina,
+    "zero_length_edges":    ZeroLengthEdges,
+    "starlike":             Starlike,
+    "missing_uvs":          MissingUVs,
+    "duplicated_names":     DuplicatedNames,
+    "shape_names":          ShapeNames,
+    "trailing_numbers":     TrailingNumbers,
+    "uncentered_pivots":    UncenteredPivots,
+    "parent_geometry":      ParentGeometry,
 }
 
 CHECK_CATEGORIES: dict = {
     "TOPOLOGY":   ("non_manifold", "boundary_edges", "isolated_verts",
                    "duplicate_verts", "face_aspect_ratio",
                    "triangles", "ngons", "poles", "zero_area",
-                   "flipped_normals", "invalid_normals", "z_fighting"),
+                   "flipped_normals", "invalid_normals", "z_fighting",
+                   "hard_edges", "lamina", "zero_length_edges", "starlike"),
     "TRANSFORMS": ("non_applied_transform", "scale", "construction_history",
-                   "origin_at_zero", "modifier_stack"),
+                   "origin_at_zero", "modifier_stack",
+                   "uncentered_pivots", "parent_geometry"),
     "SYMMETRY":   ("symmetry_x", "symmetry_y", "symmetry_z"),
     "UV":         ("uv_single_set", "uv_udim_ready", "uv_udim_bounds", "uv_material_udim",
-                   "uv_overlap", "uv_micro_shell", "uv_stretch", "uv_texel_density", "uv_padding"),
-    "NAMING":     ("obj_naming", "col_naming", "mat_numbering"),
+                   "uv_overlap", "uv_micro_shell", "uv_stretch", "uv_texel_density", "uv_padding",
+                   "missing_uvs"),
+    "NAMING":     ("obj_naming", "col_naming", "mat_numbering",
+                   "duplicated_names", "shape_names", "trailing_numbers"),
     "MATERIALS":  ("mat_suffix", "mat_assignment", "missing_textures"),
     "CLEANUP":    ("unused_data",),
 }
