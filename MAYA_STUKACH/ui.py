@@ -72,6 +72,14 @@ def dpi_scale(value: int) -> int:
         return value
 
 
+# Fixed heights for TEXT buttons must exceed the PHYSICALLY rendered font:
+# on some monitors Qt logical metrics are ~25% smaller than the drawn glyphs,
+# and tight heights clip the label bottom (Copy Summary, Rename, mini Fix...)
+_BTN_H = _px(30)   # standard text button
+_BTN_H_SM = _px(26)   # compact text button
+_BTN_H_XS = _px(24)   # mini button (Sel/Ign/Fix, S/D, x)
+
+
 @contextlib.contextmanager
 def block_signals(*widgets):
     for w in widgets:
@@ -312,7 +320,7 @@ class _CheckGridRow(QtWidgets.QWidget):
     def __init__(self, key: str, parent=None):
         super().__init__(parent)
         self._key = key
-        self.setFixedHeight(_px(24))
+        self.setFixedHeight(_BTN_H)
 
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(_px(4), 0, _px(4), 0)
@@ -396,7 +404,7 @@ class _CategoryBox(QtWidgets.QFrame):
         header.addStretch()
 
         self._fix_btn = QtWidgets.QPushButton("Fix")
-        self._fix_btn.setFixedHeight(_px(20))
+        self._fix_btn.setFixedHeight(_BTN_H_SM)
         self._fix_btn.setToolTip("Auto-fix every fixable issue in this category")
         self._fix_btn.setVisible(False)
         self._fix_btn.clicked.connect(self._on_fix_category)
@@ -456,7 +464,7 @@ class _CategoryBox(QtWidgets.QFrame):
             grid.addWidget(lbl_p, 1, col * 2)
             e_p = QtWidgets.QLineEdit()
             e_p.setPlaceholderText("_")
-            e_p.setFixedHeight(_px(20))
+            e_p.setFixedHeight(_BTN_H_SM)
             e_p.setToolTip("Required %s name prefix (scene-wide)" % title[:-1].lower())
             e_p.setProperty("naming_getter", get_p)
             e_p.setProperty("naming_setter", set_p)
@@ -469,7 +477,7 @@ class _CategoryBox(QtWidgets.QFrame):
             grid.addWidget(lbl_s, 2, col * 2)
             e_s = QtWidgets.QLineEdit()
             e_s.setPlaceholderText("_")
-            e_s.setFixedHeight(_px(20))
+            e_s.setFixedHeight(_BTN_H_SM)
             e_s.setToolTip("Required %s name suffix (scene-wide)" % title[:-1].lower())
             e_s.setProperty("naming_getter", get_s)
             e_s.setProperty("naming_setter", set_s)
@@ -495,7 +503,7 @@ class _CategoryBox(QtWidgets.QFrame):
         # QPushButton + menu: an editable QComboBox rendered dark-on-dark
         # artifacts at some DPI scales, so a plain button opens a menu
         self._uv_rename_target = QtWidgets.QPushButton("map1")
-        self._uv_rename_target.setFixedHeight(_px(26))   # scaled-monitor
+        self._uv_rename_target.setFixedHeight(_BTN_H)
         # fonts need more height than logical metrics — 22px clipped the text
         self._uv_rename_target.setMinimumWidth(_px(70))
         self._uv_rename_target.setMaximumWidth(_px(110))
@@ -521,7 +529,7 @@ class _CategoryBox(QtWidgets.QFrame):
             "Rename on ALL scene meshes, not only validated ones")
         lay.addWidget(self._uv_all_scene)
         btn = QtWidgets.QPushButton("Rename")
-        btn.setFixedHeight(_px(20))
+        btn.setFixedHeight(_BTN_H_SM)
         btn.setToolTip("Rename UV sets to the target name")
         btn.clicked.connect(self._on_uv_rename)
         lay.addWidget(btn)
@@ -615,7 +623,7 @@ class _CategoryBox(QtWidgets.QFrame):
     def _build_check_naming_btn(self, parent) -> QtWidgets.QWidget:
         b = QtWidgets.QPushButton("Check Naming")
         b.setObjectName("catBoxChild")
-        b.setFixedHeight(_px(22))
+        b.setFixedHeight(_BTN_H)
         b.setToolTip("Re-run the naming checks on all objects")
         b.clicked.connect(lambda: _manager.MayaCheck.run_all())
         return b
@@ -719,7 +727,7 @@ class _DetailCheckRow(QtWidgets.QWidget):
     def __init__(self, key: str, parent=None):
         super().__init__(parent)
         self._key = key
-        self.setFixedHeight(_px(24))
+        self.setFixedHeight(_BTN_H)
 
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(_px(10), 0, _px(2), 0)
@@ -738,7 +746,7 @@ class _DetailCheckRow(QtWidgets.QWidget):
 
         def _mini(text, tooltip):
             b = QtWidgets.QPushButton(text)
-            b.setFixedHeight(_px(18))
+            b.setFixedHeight(_BTN_H_XS)
             b.setStyleSheet(small)
             b.setToolTip(tooltip)
             layout.addWidget(b)
@@ -991,7 +999,7 @@ class _IgnoredBox(QtWidgets.QWidget):
         header.addWidget(self._title)
         header.addStretch()
         clear_btn = QtWidgets.QPushButton("Clear All")
-        clear_btn.setFixedHeight(_px(20))
+        clear_btn.setFixedHeight(_BTN_H_SM)
         clear_btn.setStyleSheet(
             "QPushButton { font-size: %dpx; padding: %dpx %dpx; }"
             % (max(1, _FONT_PX - 2), 0, _px(5)))
@@ -1137,7 +1145,7 @@ class StukachPanel(QtWidgets.QWidget):
         mode_row.setSpacing(_px(2))
         self._mode_coord_btn = QtWidgets.QPushButton("Coordinator Mode")
         self._mode_coord_btn.setCheckable(True)
-        self._mode_coord_btn.setFixedHeight(_px(24))
+        self._mode_coord_btn.setFixedHeight(_BTN_H)
         self._mode_coord_btn.setToolTip(
             "Coordinator mode: hide INFO checks, gate view + Copy Report. "
             "Click again to return to Artist Mode.")
@@ -1145,7 +1153,7 @@ class StukachPanel(QtWidgets.QWidget):
         mode_row.addWidget(self._mode_coord_btn, stretch=1)
         self._mode_live_btn = QtWidgets.QPushButton("Live")
         self._mode_live_btn.setCheckable(True)
-        self._mode_live_btn.setFixedHeight(_px(24))
+        self._mode_live_btn.setFixedHeight(_BTN_H)
         self._mode_live_btn.setToolTip(
             "Live mode: revalidate dirty objects every second")
         self._mode_live_btn.clicked.connect(self._on_live_toggled)
@@ -1226,13 +1234,13 @@ class StukachPanel(QtWidgets.QWidget):
         actions_row = QtWidgets.QHBoxLayout()
         actions_row.setSpacing(_px(3))
         self._next_issue_btn = QtWidgets.QPushButton("Next Issue")
-        self._next_issue_btn.setFixedHeight(_px(22))
+        self._next_issue_btn.setFixedHeight(_BTN_H)
         self._next_issue_btn.setToolTip(
             "Jump to the next problem object (worst-first cycle)")
         self._next_issue_btn.clicked.connect(self._on_next_issue)
         actions_row.addWidget(self._next_issue_btn, stretch=1)
         self._copy_btn = QtWidgets.QPushButton("Copy Summary")
-        self._copy_btn.setFixedHeight(_px(22))
+        self._copy_btn.setFixedHeight(_BTN_H)
         self._copy_btn.setToolTip("Copy validation summary to clipboard")
         self._copy_btn.clicked.connect(self._on_copy_summary)
         actions_row.addWidget(self._copy_btn, stretch=1)
@@ -1248,14 +1256,14 @@ class StukachPanel(QtWidgets.QWidget):
         self._scope_selected_btn = QtWidgets.QPushButton("Selected")
         for btn in (self._scope_scene_btn, self._scope_selected_btn):
             btn.setCheckable(True)
-            btn.setFixedHeight(_px(24))
+            btn.setFixedHeight(_BTN_H)
             self._scope_group.addButton(btn)
             scope_row.addWidget(btn, stretch=1)
         self._scope_scene_btn.setChecked(True)
         self._scope_scene_btn.clicked.connect(lambda: self._on_scope_changed("SCENE"))
         self._scope_selected_btn.clicked.connect(lambda: self._on_scope_changed("SELECTED"))
         self._clear_btn = QtWidgets.QPushButton("✕ Clear")
-        self._clear_btn.setFixedHeight(_px(24))
+        self._clear_btn.setFixedHeight(_BTN_H)
         self._clear_btn.setToolTip("Stop validation and clear results")
         self._clear_btn.clicked.connect(self._on_stop)
         root.addLayout(scope_row)
@@ -1269,7 +1277,7 @@ class StukachPanel(QtWidgets.QWidget):
 
         def _small(text, tooltip, slot):
             b = QtWidgets.QPushButton(text)
-            b.setFixedHeight(_px(20))
+            b.setFixedHeight(_BTN_H_SM)
             b.setStyleSheet(small_qss)
             b.setToolTip(tooltip)
             b.clicked.connect(slot)
@@ -1320,7 +1328,7 @@ class StukachPanel(QtWidgets.QWidget):
         presets_row = QtWidgets.QHBoxLayout()
         presets_row.setSpacing(_px(2))
         self._preset_combo = QtWidgets.QComboBox()
-        self._preset_combo.setFixedHeight(_px(20))
+        self._preset_combo.setFixedHeight(_BTN_H_SM)
         self._preset_combo.setMinimumWidth(_px(44))
         # allow the combo to shrink below its text sizeHint: a wide minimum
         # made the row overflow the scroll viewport (right-edge clipping)
@@ -1443,13 +1451,13 @@ class StukachPanel(QtWidgets.QWidget):
         filt_row.setSpacing(_px(3))
         self._filter_edit = QtWidgets.QLineEdit()
         self._filter_edit.setPlaceholderText("Search objects")
-        self._filter_edit.setFixedHeight(_px(22))
+        self._filter_edit.setFixedHeight(_BTN_H)
         self._filter_edit.textChanged.connect(self._on_filter_changed)
         filt_row.addWidget(self._filter_edit, stretch=1)
         self._issues_only_btn = QtWidgets.QPushButton("Issues")
         self._issues_only_btn.setCheckable(True)
         self._issues_only_btn.setChecked(True)   # issues-only by default
-        self._issues_only_btn.setFixedHeight(_px(22))
+        self._issues_only_btn.setFixedHeight(_BTN_H)
         self._issues_only_btn.setToolTip(
             "ON: only objects with issues; OFF: all tracked objects")
         self._issues_only_btn.clicked.connect(self._on_issues_only)
@@ -1457,7 +1465,7 @@ class StukachPanel(QtWidgets.QWidget):
         oc_layout.addLayout(filt_row)
 
         self._expand_all_btn = QtWidgets.QPushButton("Expand All")
-        self._expand_all_btn.setFixedHeight(_px(20))
+        self._expand_all_btn.setFixedHeight(_BTN_H_SM)
         self._expand_all_btn.setStyleSheet(self._small_qss)
         self._expand_all_btn.clicked.connect(self._on_expand_all)
         oc_layout.addWidget(self._expand_all_btn)
@@ -1502,21 +1510,21 @@ class StukachPanel(QtWidgets.QWidget):
         self._coord_scope_selected_btn = QtWidgets.QPushButton("Selected")
         for btn in (self._coord_scope_scene_btn, self._coord_scope_selected_btn):
             btn.setCheckable(True)
-            btn.setFixedHeight(_px(24))
+            btn.setFixedHeight(_BTN_H)
             if btn is self._coord_scope_scene_btn:
                 btn.clicked.connect(lambda: self._on_scope_changed("SCENE"))
             else:
                 btn.clicked.connect(lambda: self._on_scope_changed("SELECTED"))
             coord_scope_row.addWidget(btn, stretch=1)
         self._coord_scope_clear_btn = QtWidgets.QPushButton("✕ Clear")
-        self._coord_scope_clear_btn.setFixedHeight(_px(24))
+        self._coord_scope_clear_btn.setFixedHeight(_BTN_H)
         self._coord_scope_clear_btn.setToolTip("Stop validation and clear results")
         self._coord_scope_clear_btn.clicked.connect(self._on_stop)
         coord_scope_row.addWidget(self._coord_scope_clear_btn)
         self._coord_layout.addLayout(coord_scope_row)
 
         self._copy_report_btn = QtWidgets.QPushButton("Copy Report")
-        self._copy_report_btn.setFixedHeight(_px(26))
+        self._copy_report_btn.setFixedHeight(_BTN_H)
         self._copy_report_btn.setToolTip(
             "Verdict report for the task: VALIDATION + BLOCKERS/WARNINGS")
         self._copy_report_btn.clicked.connect(self._on_copy_summary)
@@ -1553,7 +1561,7 @@ class StukachPanel(QtWidgets.QWidget):
         row1.addWidget(lbl1)
         for fmt in ("JSON", "CSV", "HTML"):
             b = QtWidgets.QPushButton(fmt)
-            b.setFixedHeight(_px(22))
+            b.setFixedHeight(_BTN_H)
             b.clicked.connect(lambda _=False, f=fmt.lower(): self._on_export(f))
             row1.addWidget(b, stretch=1)
         exp_layout.addLayout(row1)
@@ -1579,19 +1587,19 @@ class StukachPanel(QtWidgets.QWidget):
         lbl3.setFixedWidth(lbl_w)
         row3.addWidget(lbl3)
         b_save = QtWidgets.QPushButton("Save")
-        b_save.setFixedHeight(_px(22))
+        b_save.setFixedHeight(_BTN_H)
         b_save.setToolTip(
             "Store the current validation snapshot in the scene file")
         b_save.clicked.connect(self._on_checkpoint_save)
         row3.addWidget(b_save, stretch=1)
         b_load = QtWidgets.QPushButton("Load")
-        b_load.setFixedHeight(_px(22))
+        b_load.setFixedHeight(_BTN_H)
         b_load.setToolTip(
             "Restore the snapshot: checks + stale results (Run revalidates)")
         b_load.clicked.connect(self._on_checkpoint_load)
         row3.addWidget(b_load, stretch=1)
         b_clear = QtWidgets.QPushButton("\u2715")
-        b_clear.setFixedHeight(_px(22))
+        b_clear.setFixedHeight(_BTN_H)
         b_clear.setFixedWidth(_px(26))
         b_clear.setToolTip("Delete the checkpoint from the scene file")
         b_clear.clicked.connect(self._on_checkpoint_clear)
@@ -1601,7 +1609,7 @@ class StukachPanel(QtWidgets.QWidget):
         dbg_row = QtWidgets.QHBoxLayout()
         dbg_row.addStretch()
         self._debug_btn = QtWidgets.QPushButton("Debug Info")
-        self._debug_btn.setFixedHeight(_px(18))
+        self._debug_btn.setFixedHeight(_BTN_H_XS)
         self._debug_btn.setStyleSheet(
             "QPushButton { color: #8c8c8c; font-size: %dpx; padding: 0 %dpx; "
             "border: none; background: transparent; }"
