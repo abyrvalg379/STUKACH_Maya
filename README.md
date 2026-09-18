@@ -1,10 +1,10 @@
 # STUKACH for Maya
 
-Pipeline asset validator for Autodesk Maya. 36 checkers across 8 categories — topology, transforms, symmetry, UV, naming, materials, cleanup — with a per-face viewport overlay, one-click fixes, and a Qt panel docked anywhere you like.
+Pipeline asset validator for Autodesk Maya. 44 checkers across 8 categories — topology, transforms, symmetry, UV, naming, materials, cleanup — with a per-face viewport overlay, one-click fixes, and a Qt panel that docks into Maya's UI by default.
 
 Part of the **STUKACH — Pipeline Asset Validation System**. The Blender version lives at [abyrvalg379/STUKACH](https://github.com/abyrvalg379/STUKACH).
 
-**Author:** Maksim Kovalev · **Version:** 1.0.0 · **License:** GPL-3.0
+**Author:** Maksim Kovalev · **Version:** 1.1.0 · **License:** GPL-3.0
 
 ![STUKACH](icons/stukach_shelf_logo.png)
 
@@ -16,7 +16,7 @@ Part of the **STUKACH — Pipeline Asset Validation System**. The Blender versio
 
 ## Install (drag & drop)
 
-1. Download `STUKACH_Maya_v1.0.0.zip` from [Releases](https://github.com/abyrvalg379/STUKACH_Maya/releases) and unpack.
+1. Download `STUKACH_Maya_v1.1.0.zip` from [Releases](https://github.com/abyrvalg379/STUKACH_Maya/releases) and unpack.
 2. Drag & drop `install_stukach.py` into the Maya viewport.
 3. A **STUKACH** button appears on the *Custom* shelf — click it to open the panel.
 
@@ -43,6 +43,10 @@ The installer copies the package to `Documents/maya/2025/scripts/MAYA_STUKACH/`,
 - **Ignore system** — silence a specific check on a specific object; excluded from all roll-ups.
 - **Presets** — save/load check configurations.
 - **Reports** — JSON / CSV / HTML export.
+- **Live mode** — revalidates dirty objects every second; progressive validation keeps Maya responsive on heavy scenes.
+- **Checkpoint** — store the validation snapshot inside the scene file and restore it after reopening.
+- **USD pre-flight** — gate exports the same way as FBX.
+- **Session log & Debug Info** — one click copies versions, state and the recent log to clipboard for bug reports.
 - **Hot reload** — edit code, re-run, panel stays alive.
 
 ## Build the C++ plugin from source
