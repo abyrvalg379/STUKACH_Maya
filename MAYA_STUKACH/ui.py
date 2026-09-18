@@ -2097,6 +2097,9 @@ def _dock_builder(wc_name: str) -> None:
             layout = QtWidgets.QVBoxLayout(host)
         layout.setContentsMargins(0, 0, 0, 0)
         panel = StukachPanel(parent=host)
+        # docked: the workspace column may be narrower than the floating
+        # minimum (378) — a wider minimum was centered and clipped both sides
+        panel.setMinimumWidth(dpi_scale(330))
         layout.addWidget(panel)
         _panel_instance = panel
     except Exception as e:
@@ -2206,7 +2209,7 @@ def launch() -> StukachPanel:
         cmds.workspaceControl(_WC, label="STUKACH", uiScript=ui_script)
         cmds.workspaceControl(_WC, edit=True, restore=True)
         cmds.workspaceControl(_WC, edit=True, dockToControl=("AttributeEditor", "left"))
-        cmds.workspaceControl(_WC, edit=True, width=dpi_scale(380))
+        cmds.workspaceControl(_WC, edit=True, width=dpi_scale(400))
         if _panel_instance is not None:
             _panel_instance.setWindowFlags(Qt.Widget)
             _panel_instance.show()
