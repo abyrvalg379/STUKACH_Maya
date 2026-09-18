@@ -498,6 +498,7 @@ class _CategoryBox(QtWidgets.QFrame):
         self._uv_rename_target.setFixedHeight(_px(26))   # scaled-monitor
         # fonts need more height than logical metrics — 22px clipped the text
         self._uv_rename_target.setMinimumWidth(_px(70))
+        self._uv_rename_target.setMaximumWidth(_px(110))
         self._uv_rename_target.setToolTip(
             "Pick or type the canonical UV set name")
         # explicit style: a menu-bearing button can fall back to the native
