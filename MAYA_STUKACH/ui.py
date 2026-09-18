@@ -2216,7 +2216,9 @@ def launch() -> StukachPanel:
         cmds.workspaceControl(_WC, label="STUKACH", uiScript=ui_script)
         cmds.workspaceControl(_WC, edit=True, restore=True)
         cmds.workspaceControl(_WC, edit=True, dockToControl=("AttributeEditor", "left"))
-        cmds.workspaceControl(_WC, edit=True, width=dpi_scale(460))
+        # no width override: forcing a width wider than the space between the
+        # viewport and the Attribute Editor pushed the whole control out of
+        # its column (tab + rounded corners clipped at the left edge)
         if _panel_instance is not None:
             _panel_instance.setWindowFlags(Qt.Widget)
             _panel_instance.show()
