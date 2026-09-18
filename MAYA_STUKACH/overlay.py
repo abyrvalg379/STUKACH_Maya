@@ -238,12 +238,16 @@ def _vp2_update(objects: Dict[str, object], active_check: Optional[str] = None) 
             cmds.setAttr(loc + ".drawBBox", False)
 
         # Trigger VP2 redraw (isAlwaysDirty=false — explicit dirty).
+        # Enabled only when there is something to draw — otherwise the
+        # locator stays dormant (a forever-True toggle churned redraws).
         # Deferred calls fire AFTER the caller returns — possibly after a
         # scene change deleted the locator: guard against dead names.
+        has_data = bool(all_faces or all_edges or all_verts or has_object_issue)
         try:
             cmds.evalDeferred(
-                lambda l=loc: cmds.setAttr(l + ".drawEnabled", True)
-                if cmds.objExists(l) else None)
+                lambda l=loc, on=has_data:
+                cmds.setAttr(l + ".drawEnabled", on) if cmds.objExists(l)
+                else None)
         except Exception:
             pass
 
