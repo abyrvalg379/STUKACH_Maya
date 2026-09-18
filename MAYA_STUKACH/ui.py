@@ -658,6 +658,14 @@ class _DetailCheckRow(QtWidgets.QWidget):
             checker = mco.checkers.get(self._key)
             if checker and checker.bad_components:
                 checker.select()
+                try:
+                    # focus: frame the bad components (Blender's view_selected)
+                    cmds.viewFit(checker.bad_components)
+                except Exception:
+                    try:
+                        cmds.viewFit(mco.transform)
+                    except Exception:
+                        pass
 
     def _on_ignore(self) -> None:
         transform = self._find_transform()
