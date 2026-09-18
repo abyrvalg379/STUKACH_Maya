@@ -190,6 +190,7 @@ def _build_qss() -> str:
         "QLabel { background: transparent; }"
         "QToolButton { color: #8c8c8c; border: none; font-size: %dpx; padding: 0; }"
         "QToolButton:hover { color: #e6e6e6; }"
+        "QFrame#catBox { background: #212121; border: 1px solid #303030; border-radius: 4px; }"
     ) % (f, _px(4), _px(10), f, c, c, _px(2), _px(6), f,
          f, _px(20), _px(12), _px(30), max(1, f - 1))
 
@@ -265,7 +266,7 @@ class _HealthStrip(QtWidgets.QWidget):
         self._cells: Dict[str, QtWidgets.QFrame] = {}
         for cat in _core.CHECK_CATEGORIES:
             cell = QtWidgets.QFrame()
-            cell.setFixedHeight(_px(9))
+            cell.setFixedHeight(_px(12))
             cell.setStyleSheet("background: %s; border-radius: 2px;" % "#3a3a3a")
             cell.setToolTip(cat.title())
             lay.addWidget(cell, stretch=1)
@@ -351,15 +352,16 @@ class _CheckGridRow(QtWidgets.QWidget):
 
 # ── Category box: [v] ICON Title ... [Fix] [checkbox] + 2-column grid ─────────
 
-class _CategoryBox(QtWidgets.QWidget):
+class _CategoryBox(QtWidgets.QFrame):
     def __init__(self, category: str, keys: tuple, parent=None):
         super().__init__(parent)
+        self.setObjectName("catBox")
         self._category = category
         self._keys = keys
         self._open = False   # collapsed by default (user preference)
 
         outer = QtWidgets.QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setContentsMargins(_px(6), _px(4), _px(6), _px(6))
         outer.setSpacing(0)
 
         header = QtWidgets.QHBoxLayout()
@@ -406,10 +408,12 @@ class _CategoryBox(QtWidgets.QWidget):
         grid.setHorizontalSpacing(_px(4))
         grid.setVerticalSpacing(0)
         self._rows: Dict[str, _CheckGridRow] = {}
-        base_row = 1 if category == "NAMING" else 0
+        self._naming_base = 0
         if category == "NAMING":
-            # Inline naming-policy fields take grid row 0; checks start below
             grid.addWidget(self._build_naming_fields(self._content), 0, 0, 1, 2)
+            grid.addWidget(self._build_check_naming_btn(self._content), 1, 0, 1, 2)
+            self._naming_base = 2
+        base_row = self._naming_base
         for i, key in enumerate(keys):
             row = _CheckGridRow(key, self._content)
             grid.addWidget(row, base_row + i // 2, i % 2)
@@ -418,34 +422,64 @@ class _CategoryBox(QtWidgets.QWidget):
         self._content.setVisible(False)   # collapsed by default (user pref)
 
     def _build_naming_fields(self, parent) -> QtWidgets.QWidget:
-        """Inline Objects prefix/suffix fields (Blender parity, compact)."""
+        """Blender-style naming policy block: Objects / Groups columns."""
         w = QtWidgets.QWidget(parent)
-        lay = QtWidgets.QHBoxLayout(w)
-        lay.setContentsMargins(_px(2), _px(2), _px(2), _px(2))
-        lay.setSpacing(_px(3))
+        grid = QtWidgets.QGridLayout(w)
+        grid.setContentsMargins(_px(2), _px(2), _px(2), _px(2))
+        grid.setHorizontalSpacing(_px(8))
+        grid.setVerticalSpacing(_px(2))
         small = "font-size: %dpx; color: #909090;" % max(1, _FONT_PX - 1)
-        lbl = QtWidgets.QLabel("Obj:")
-        lbl.setStyleSheet(small)
-        lay.addWidget(lbl)
-        self._naming_prefix_edit = QtWidgets.QLineEdit()
-        self._naming_prefix_edit.setPlaceholderText("prefix")
-        self._naming_prefix_edit.setToolTip("Required object-name prefix (scene-wide)")
-        self._naming_prefix_edit.editingFinished.connect(self._on_naming_edited)
-        self._naming_suffix_edit = QtWidgets.QLineEdit()
-        self._naming_suffix_edit.setPlaceholderText("suffix")
-        self._naming_suffix_edit.setToolTip("Required object-name suffix (scene-wide)")
-        self._naming_suffix_edit.editingFinished.connect(self._on_naming_edited)
-        for e in (self._naming_prefix_edit, self._naming_suffix_edit):
-            e.setFixedHeight(_px(20))
-            lay.addWidget(e, stretch=1)
+        self._naming_edits = {}
+        for col, (title, get_p, get_s, set_p, set_s) in enumerate((
+                ("Objects:", "get_prefix", "get_suffix", "set_prefix", "set_suffix"),
+                ("Groups:", "get_col_prefix", "get_col_suffix", "set_col_prefix", "set_col_suffix"))):
+            cap = QtWidgets.QLabel(title)
+            cap.setStyleSheet("color: #c8c8c8; font-weight: bold;")
+            grid.addWidget(cap, 0, col * 2, 1, 2)
+            # prefix row
+            lbl_p = QtWidgets.QLabel("Prefix:")
+            lbl_p.setStyleSheet(small)
+            grid.addWidget(lbl_p, 1, col * 2)
+            e_p = QtWidgets.QLineEdit()
+            e_p.setPlaceholderText("_")
+            e_p.setFixedHeight(_px(20))
+            e_p.setToolTip("Required %s name prefix (scene-wide)" % title[:-1].lower())
+            e_p.setProperty("naming_getter", get_p)
+            e_p.setProperty("naming_setter", set_p)
+            e_p.editingFinished.connect(self._on_naming_edited)
+            grid.addWidget(e_p, 1, col * 2 + 1)
+            self._naming_edits[get_p] = e_p
+            # suffix row
+            lbl_s = QtWidgets.QLabel("Suffix:")
+            lbl_s.setStyleSheet(small)
+            grid.addWidget(lbl_s, 2, col * 2)
+            e_s = QtWidgets.QLineEdit()
+            e_s.setPlaceholderText("_")
+            e_s.setFixedHeight(_px(20))
+            e_s.setToolTip("Required %s name suffix (scene-wide)" % title[:-1].lower())
+            e_s.setProperty("naming_getter", get_s)
+            e_s.setProperty("naming_setter", set_s)
+            e_s.editingFinished.connect(self._on_naming_edited)
+            grid.addWidget(e_s, 2, col * 2 + 1)
+            self._naming_edits[get_s] = e_s
         return w
+
+    def _build_check_naming_btn(self, parent) -> QtWidgets.QWidget:
+        b = QtWidgets.QPushButton("Check Naming")
+        b.setObjectName("catBoxChild")
+        b.setFixedHeight(_px(22))
+        b.setToolTip("Re-run the naming checks on all objects")
+        b.clicked.connect(lambda: _manager.MayaCheck.run_all())
+        return b
 
     def _on_naming_edited(self) -> None:
         policy = _core.NamingPolicy
-        policy.set_prefix(self._naming_prefix_edit.text().strip())
-        policy.set_suffix(self._naming_suffix_edit.text().strip())
-        _manager.alog("naming policy: prefix='%s' suffix='%s'"
-                      % (policy.get_prefix(), policy.get_suffix()))
+        edit = self.sender()
+        getter = edit.property("naming_getter")
+        setter = edit.property("naming_setter")
+        getattr(policy, setter)(edit.text().strip())
+        _manager.alog("naming policy %s -> '%s'"
+                      % (getter, getattr(policy, getter)()))
         _manager.MayaCheck.run_all()
 
     def _on_collapse(self) -> None:
@@ -471,8 +505,8 @@ class _CategoryBox(QtWidgets.QWidget):
         # Inline naming fields — sync from NamingPolicy
         if self._category == "NAMING":
             policy = _core.NamingPolicy
-            for edit, val in ((self._naming_prefix_edit, policy.get_prefix()),
-                              (self._naming_suffix_edit, policy.get_suffix())):
+            for getter, edit in self._naming_edits.items():
+                val = getattr(policy, getter)()
                 edit.blockSignals(True)
                 if edit.text() != val:
                     edit.setText(val)
@@ -495,7 +529,7 @@ class _CategoryBox(QtWidgets.QWidget):
                     info_keys.add(k)
         # Re-flow grid so hiding INFO rows doesn't leave empty cells
         visible = [k for k in self._keys if k not in info_keys]
-        base_row = 1 if self._category == "NAMING" else 0
+        base_row = self._naming_base
         for i, key in enumerate(visible):
             row = self._rows[key]
             grid = self._content.layout()
@@ -906,26 +940,6 @@ class StukachPanel(QtWidgets.QWidget):
         root.setContentsMargins(_px(6), _px(6), _px(6), _px(6))
         root.setSpacing(_px(4))
 
-        self._stack = QtWidgets.QStackedWidget()
-        root.addWidget(self._stack, stretch=1)
-
-        artist_page = QtWidgets.QWidget()
-        artist_layout = QtWidgets.QVBoxLayout(artist_page)
-        artist_layout.setContentsMargins(0, 0, 0, 0)
-        artist_layout.setSpacing(_px(4))
-        self._stack.addWidget(artist_page)
-
-        coord_page = QtWidgets.QWidget()
-        self._coord_layout = QtWidgets.QVBoxLayout(coord_page)
-        self._coord_layout.setContentsMargins(0, 0, 0, 0)
-        self._coord_layout.setSpacing(_px(4))
-        self._stack.addWidget(coord_page)
-
-        self._build_artist_page(artist_layout)
-        self._build_coordinator_page(self._coord_layout)
-        self._build_delivery_box(root)   # shared by both pages
-
-    def _build_artist_page(self, root: QtWidgets.QVBoxLayout) -> None:
         # ── header: title + subtitle ──
         title_box = QtWidgets.QVBoxLayout()
         title_box.setSpacing(0)
@@ -948,14 +962,15 @@ class StukachPanel(QtWidgets.QWidget):
             "QPushButton:hover { background: #5683c8; }" % _C_SELECT)
         root.addWidget(self._run_btn)
 
-        # ── mode toolbar: [Coordinator Mode | Live] ──
+        # mode toolbar above the stack — visible on BOTH pages
         mode_row = QtWidgets.QHBoxLayout()
         mode_row.setSpacing(_px(2))
         self._mode_coord_btn = QtWidgets.QPushButton("Coordinator Mode")
         self._mode_coord_btn.setCheckable(True)
         self._mode_coord_btn.setFixedHeight(_px(24))
         self._mode_coord_btn.setToolTip(
-            "Coordinator mode: hide INFO checks, gate view + Copy Report")
+            "Coordinator mode: hide INFO checks, gate view + Copy Report. "
+            "Click again to return to Artist Mode.")
         self._mode_coord_btn.clicked.connect(self._on_coordinator_toggled)
         mode_row.addWidget(self._mode_coord_btn, stretch=1)
         self._mode_live_btn = QtWidgets.QPushButton("Live")
@@ -967,7 +982,27 @@ class StukachPanel(QtWidgets.QWidget):
         mode_row.addWidget(self._mode_live_btn, stretch=1)
         root.addLayout(mode_row)
 
-        # isolate badge (Shift+click on a check)
+        self._stack = QtWidgets.QStackedWidget()
+        root.addWidget(self._stack, stretch=1)
+
+        artist_page = QtWidgets.QWidget()
+        artist_layout = QtWidgets.QVBoxLayout(artist_page)
+        artist_layout.setContentsMargins(0, 0, 0, 0)
+        artist_layout.setSpacing(_px(4))
+        self._stack.addWidget(artist_page)
+
+        coord_page = QtWidgets.QWidget()
+        self._coord_layout = QtWidgets.QVBoxLayout(coord_page)
+        self._coord_layout.setContentsMargins(0, 0, 0, 0)
+        self._coord_layout.setSpacing(_px(4))
+        self._stack.addWidget(coord_page)
+
+        self._build_artist_page(artist_layout)
+        self._build_coordinator_page(self._coord_layout)
+        self._build_delivery_box(root)   # shared by both pages
+
+    def _build_artist_page(self, root: QtWidgets.QVBoxLayout) -> None:
+        # ── isolate badge ── (Shift+click on a check)
         self._isolate_badge = QtWidgets.QLabel("")
         self._isolate_badge.setStyleSheet(
             "background: #4772b3; color: white; font-size: %dpx;"
@@ -1031,11 +1066,10 @@ class StukachPanel(QtWidgets.QWidget):
         self._scope_scene_btn.setChecked(True)
         self._scope_scene_btn.clicked.connect(lambda: self._on_scope_changed("SCENE"))
         self._scope_selected_btn.clicked.connect(lambda: self._on_scope_changed("SELECTED"))
-        self._clear_btn = QtWidgets.QPushButton("✕")
-        self._clear_btn.setFixedSize(_px(26), _px(24))
+        self._clear_btn = QtWidgets.QPushButton("✕ Clear")
+        self._clear_btn.setFixedHeight(_px(24))
         self._clear_btn.setToolTip("Stop validation and clear results")
         self._clear_btn.clicked.connect(self._on_stop)
-        scope_row.addWidget(self._clear_btn)
         root.addLayout(scope_row)
 
         # ── compact batch row ──
@@ -1069,7 +1103,7 @@ class StukachPanel(QtWidgets.QWidget):
 
         # ── scene units row ──
         self._units_rows = []
-        root.addLayout(self._build_units_row())
+        root.addWidget(self._build_units_row())
 
         # ── scroll: Pipeline Checks + Objects ──
         scroll = QtWidgets.QScrollArea()
@@ -1100,16 +1134,16 @@ class StukachPanel(QtWidgets.QWidget):
         self._preset_combo.setMinimumWidth(_px(70))
         self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
         presets_row.addWidget(self._preset_combo, stretch=1)
-        self._preset_save_btn = QtWidgets.QPushButton("S")
+        self._preset_save_btn = QtWidgets.QPushButton("+")
         self._preset_save_btn.setFixedSize(_px(22), _px(20))
         self._preset_save_btn.setStyleSheet(small_qss)
         self._preset_save_btn.setToolTip("Save preset")
         self._preset_save_btn.clicked.connect(self._on_preset_save)
         presets_row.addWidget(self._preset_save_btn)
-        self._preset_del_btn = QtWidgets.QPushButton("D")
+        self._preset_del_btn = QtWidgets.QPushButton("\u2212")
         self._preset_del_btn.setFixedSize(_px(22), _px(20))
         self._preset_del_btn.setStyleSheet(small_qss)
-        self._preset_del_btn.setToolTip("Delete preset")
+        self._preset_del_btn.setToolTip("Delete selected preset")
         self._preset_del_btn.clicked.connect(self._on_preset_delete)
         presets_row.addWidget(self._preset_del_btn)
         self._presets_widget = QtWidgets.QWidget()
@@ -1144,9 +1178,12 @@ class StukachPanel(QtWidgets.QWidget):
         verdict_layout.addWidget(self._verdict_subtext)
         root.addWidget(self._verdict_widget)
 
-    def _build_units_row(self) -> None:
-        """Scene Units check + status label (used on both pages)."""
-        units_row = QtWidgets.QHBoxLayout()
+    def _build_units_row(self) -> QtWidgets.QHBoxLayout:
+        """Scene Units check + status label, wrapped in a bordered box."""
+        box = QtWidgets.QFrame()
+        box.setObjectName("catBox")
+        units_row = QtWidgets.QHBoxLayout(box)
+        units_row.setContentsMargins(_px(6), _px(3), _px(6), _px(3))
         units_row.setSpacing(_px(4))
         toggle = QtWidgets.QCheckBox("Scene Units")
         toggle.setToolTip("Check scene units: METRIC · m · scale 1.0")
@@ -1158,12 +1195,13 @@ class StukachPanel(QtWidgets.QWidget):
             "color: #909090; font-size: %dpx;" % max(1, _FONT_PX - 1))
         units_row.addWidget(status)
         self._units_rows.append((toggle, status))
-        return units_row
+        return box
 
     def _build_objects_section(self, cont_layout: QtWidgets.QVBoxLayout) -> None:
-        self._objects_box = QtWidgets.QWidget()
+        self._objects_box = QtWidgets.QFrame()
+        self._objects_box.setObjectName("catBox")
         obj_outer = QtWidgets.QVBoxLayout(self._objects_box)
-        obj_outer.setContentsMargins(0, 0, 0, 0)
+        obj_outer.setContentsMargins(_px(6), _px(4), _px(6), _px(6))
         obj_outer.setSpacing(_px(3))
         self._objects_open = False   # collapsed by default like the categories
 
@@ -1253,7 +1291,7 @@ class StukachPanel(QtWidgets.QWidget):
         root.addWidget(self._gate_widget)
 
         # ── units + scope rows (coordinator's own instances) ──
-        root.addLayout(self._build_units_row())
+        root.addWidget(self._build_units_row())
         coord_scope_row = QtWidgets.QHBoxLayout()
         coord_scope_row.setSpacing(_px(2))
         self._coord_scope_scene_btn = QtWidgets.QPushButton("Scene")
@@ -1266,12 +1304,12 @@ class StukachPanel(QtWidgets.QWidget):
             else:
                 btn.clicked.connect(lambda: self._on_scope_changed("SELECTED"))
             coord_scope_row.addWidget(btn, stretch=1)
-        self._coord_scope_clear_btn = QtWidgets.QPushButton("✕")
-        self._coord_scope_clear_btn.setFixedSize(_px(26), _px(24))
+        self._coord_scope_clear_btn = QtWidgets.QPushButton("✕ Clear")
+        self._coord_scope_clear_btn.setFixedHeight(_px(24))
         self._coord_scope_clear_btn.setToolTip("Stop validation and clear results")
         self._coord_scope_clear_btn.clicked.connect(self._on_stop)
         coord_scope_row.addWidget(self._coord_scope_clear_btn)
-        root.addLayout(coord_scope_row)
+        self._coord_layout.addLayout(coord_scope_row)
 
         self._copy_report_btn = QtWidgets.QPushButton("Copy Report")
         self._copy_report_btn.setFixedHeight(_px(26))
@@ -1353,7 +1391,7 @@ class StukachPanel(QtWidgets.QWidget):
             _manager.MayaCheck.scope = scope
             _manager.MayaCheck.set_overlay_enabled(self._overlay_cb.isChecked())
             _manager.MayaCheck.start(ui_callback=self.refresh)
-            self._run_btn.setText("STUKACH ACTIVE")
+            self._run_btn.setText("\u25cf STUKACH ACTIVE")
         else:
             self._on_stop()
 
@@ -1516,7 +1554,8 @@ class StukachPanel(QtWidgets.QWidget):
         running = mc._running
         self._run_btn.blockSignals(True)
         self._run_btn.setChecked(running)
-        self._run_btn.setText("STUKACH ACTIVE" if running else "RUN STUKACH")
+        self._run_btn.setText(
+            ("\u25cf STUKACH ACTIVE" if running else "RUN STUKACH"))
         self._run_btn.blockSignals(False)
 
         # mode toolbar + page stack + category box parenting
