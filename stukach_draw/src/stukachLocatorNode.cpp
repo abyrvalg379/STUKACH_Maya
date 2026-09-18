@@ -63,42 +63,13 @@ void* StukachLocatorNode::creator()
 
 MBoundingBox StukachLocatorNode::boundingBox() const
 {
-    MStatus status;
-    MFnDependencyNode depNode(thisMObject(), &status);
-    if (!status) return MBoundingBox();
-
-    MPlug enPlug = depNode.findPlug(aDrawEnabled, false, &status);
-    if (!status || !enPlug.asBool()) return MBoundingBox();
-
-    // Transform-issue wireframe: extent comes straight from the bbox attrs
-    MPlug dbbPlug = depNode.findPlug(aDrawBBox, false, &status);
-    if (status && dbbPlug.asBool()) {
-        MPlug mn = depNode.findPlug(aBBoxMin, false);
-        MPlug mx = depNode.findPlug(aBBoxMax, false);
-        if (!mn.isNull() && !mx.isNull()) {
-            MPoint a(mn.child(0).asFloat(), mn.child(1).asFloat(), mn.child(2).asFloat());
-            MPoint b(mx.child(0).asFloat(), mx.child(1).asFloat(), mx.child(2).asFloat());
-            return MBoundingBox(a, b);
-        }
-    }
-
-    // Component overlay: cover the connected mesh, transformed to world space
-    MPlug inPlug = depNode.findPlug(aInputMesh, false, &status);
-    if (!status || inPlug.isNull()) return MBoundingBox();
-    MPlugArray sources;
-    inPlug.connectedTo(sources, true, false);
-    if (sources.length() == 0) return MBoundingBox();
-    MObject meshObj = sources[0].node();
-    if (meshObj.isNull() || !meshObj.hasFn(MFn::kMesh)) return MBoundingBox();
-
-    MFnDagNode dagFn(meshObj, &status);
-    if (!status) return MBoundingBox();
-    MBoundingBox bb = dagFn.boundingBox();
-    MDagPath dp;
-    if (dagFn.getPath(dp)) {
-        bb.transformUsing(dp.inclusiveMatrix());
-    }
-    return bb;
+    // EMPTY on purpose. Maya uses the NODE bounding box for viewport
+    // SELECTION picking as well as culling: returning the connected mesh's
+    // bbox made the invisible locator span the whole object, so clicking
+    // the mesh selected the locator instead (selection "flicker").
+    // Frustum culling is handled by StukachDrawOverride::boundingBox,
+    // which still reports the real overlay extent.
+    return MBoundingBox();
 }
 
 // ── Initialize — declare all attributes ─────────────────────────────────────
