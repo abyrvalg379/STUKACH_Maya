@@ -1898,12 +1898,33 @@ def _ensure_command_port() -> None:
         pass
 
 
+_NEW_CHECKS_V11 = ("hard_edges", "lamina", "zero_length_edges", "starlike",
+                   "missing_uvs", "duplicated_names", "shape_names",
+                   "trailing_numbers", "uncentered_pivots", "parent_geometry")
+
+
+def _migrate_new_checks() -> None:
+    """One-time: enable the v1.1 checks on upgrade (they ship OFF and would
+    otherwise be invisible to existing users)."""
+    try:
+        if cmds.optionVar(query="stukachNewChecks10"):
+            return
+        for k in _NEW_CHECKS_V11:
+            _manager.MayaCheck._enabled_checks[k] = True
+        cmds.optionVar(sv=("stukachNewChecks10", "1"))
+        cmds.inViewMessage(amg="STUKACH: 10 new checks enabled (v1.1)",
+                           pos="topCenter", fade=True)
+    except Exception:
+        pass
+
+
 def launch() -> StukachPanel:
     """Open the STUKACH panel as a floating window anchored to the
     top-right screen corner (user preference — dock hosting proved
     unstable across reopen cycles)."""
     global _panel_instance
     _ensure_command_port()
+    _migrate_new_checks()
     if _panel_instance is not None:
         try:
             _panel_instance.close()
