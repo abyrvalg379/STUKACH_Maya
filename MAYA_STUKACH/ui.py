@@ -2,17 +2,21 @@
 """
 STUKACH for Maya — Qt panel, pixel-faithful replica of the Blender add-on UI.
 
-Layout (top to bottom, mirrors Blender's ASSET_CHECKER_PT_Panel.draw()):
-  STUKACH / pipeline snitch system
-  [ RUN STUKACH ]  [Coord]
-  score box (obj · block/warn + per-category badges + [SCOPE])
-  [Scene][Selected][✕]
-  compact: All None Blk Wrn · Preset ▼ S D · Viewport
+Layout (top to bottom, mirrors Blender's ASSET_CHECKER_PT_Panel v1.6.x):
+  STUKACH v1.1.0 / Pipeline Snitch System
+  [ RUN STUKACH ]
+  [ Coordinator Mode | Live ]
+  score block: status line + health-strip + [Next Issue][Copy Summary]
+  [Scene][Selected][x]
+  batch: All None Blk Wrn ... Viewport
   Scene Units row
-  Pipeline Checks: 7 collapsible categories, 2-column check grid
-  Objects (collapsible): filter · per-object expandable details
+  Pipeline Checks: collapsible categories (2-col grid, swatches, naming fields)
+  presets row
+  Objects (collapsible): search/issues/expand-all, worst-first details
+  Ignored Issues (n)
   ASSET STATUS box
-  Export: JSON/CSV/HTML · Pre-flight FBX · Publish
+  Export: JSON/CSV/HTML | Pre-flight: FBX | Debug Info
+  Coordinator page: status badge, units, scope, Copy Report, C&W checks
 
 Compatible with Maya 2022+ (PySide2) and Maya 2025+ (PySide6).
 """
@@ -37,6 +41,8 @@ import maya.OpenMayaUI as omui
 from . import core as _core
 from . import manager as _manager
 from . import overlay as _overlay
+
+_VERSION = _manager._VERSION
 
 
 # ── Maya-native font + DPI scaling ────────────────────────────────────────────
@@ -141,17 +147,20 @@ _CHECK_DISPLAY_NAMES = {
     "construction_history": "Construction History", "origin_at_zero": "Origin at Zero",
     "modifier_stack": "Modifier Stack", "symmetry_x": "Symmetry X",
     "symmetry_y": "Symmetry Y", "symmetry_z": "Symmetry Z",
-    "uv_single_set": "Uv Single Set", "uv_udim_ready": "Uv UDIM Ready",
-    "uv_udim_bounds": "Uv UDIM Bounds", "uv_material_udim": "Uv Material Udim",
-    "uv_overlap": "Uv Overlap", "uv_stretch": "Uv Stretch",
-    "uv_texel_density": "Uv Texel Density", "uv_micro_shell": "Uv Micro Shell",
-    "uv_padding": "Uv Padding", "obj_naming": "Object Name",
+    "uv_single_set": "UV Single Set", "uv_udim_ready": "UV UDIM Ready",
+    "uv_udim_bounds": "UV UDIM Bounds", "uv_material_udim": "UV Material UDIM",
+    "uv_overlap": "UV Overlap", "uv_stretch": "UV Stretch",
+    "uv_texel_density": "UV Texel Density", "uv_micro_shell": "UV Micro Shell",
+    "uv_padding": "UV Padding", "obj_naming": "Object Name",
     "col_naming": "Group Name", "mat_numbering": "Mat Numbering",
     "mat_suffix": "Mat Suffix", "mat_assignment": "Mat Assignment",
     "missing_textures": "Missing Textures", "unused_data": "Unused Data",
 }
 
 _YELLOW_THRESHOLDS = {"triangles": 50, "ngons": 10, "poles": 20}
+
+# metric_text longer than this renders on its own full-width row
+_METRIC_FULL_WIDTH = 34
 
 
 def _build_qss() -> str:
@@ -245,6 +254,37 @@ class _Swatch(QtWidgets.QWidget):
                 self.colorChanged.emit(self._key, hex_c)
 
 
+class _HealthStrip(QtWidgets.QWidget):
+    """Blender health-strip: one color cell per category (green/yellow/red)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(_px(2), _px(1), _px(2), _px(1))
+        lay.setSpacing(_px(2))
+        self._cells: Dict[str, QtWidgets.QFrame] = {}
+        for cat in _core.CHECK_CATEGORIES:
+            cell = QtWidgets.QFrame()
+            cell.setFixedHeight(_px(9))
+            cell.setStyleSheet("background: %s; border-radius: 2px;" % "#3a3a3a")
+            cell.setToolTip(cat.title())
+            lay.addWidget(cell, stretch=1)
+            self._cells[cat] = cell
+
+    def refresh(self, summary: Dict[str, "tuple[int, int]"]) -> None:
+        for cat, (b, w) in summary.items():
+            cell = self._cells.get(cat)
+            if cell is None:
+                continue
+            if b:
+                color = _C_RED
+            elif w:
+                color = _C_YELLOW
+            else:
+                color = _C_GREEN
+            cell.setStyleSheet("background: %s; border-radius: 2px;" % color)
+
+
 def _status_color(count: int, key: str) -> str:
     if count == 0:
         return _C_GREEN
@@ -254,7 +294,7 @@ def _status_color(count: int, key: str) -> str:
     return _C_RED
 
 
-# ── Check grid row (categories): [☑] Label  ●  — Blender's 2-column grid ──────
+# ── Check grid row (categories): [checkbox] Label  [swatch] ───────────────────
 
 class _CheckGridRow(QtWidgets.QWidget):
     def __init__(self, key: str, parent=None):
@@ -309,14 +349,14 @@ class _CheckGridRow(QtWidgets.QWidget):
                 _manager.MayaCheck.objects, _manager.MayaCheck.active_check)
 
 
-# ── Category box: ▸ ICON Title ... [Fix] [☑] + 2-column grid ──────────────────
+# ── Category box: [v] ICON Title ... [Fix] [checkbox] + 2-column grid ─────────
 
 class _CategoryBox(QtWidgets.QWidget):
     def __init__(self, category: str, keys: tuple, parent=None):
         super().__init__(parent)
         self._category = category
         self._keys = keys
-        self._open = True
+        self._open = False   # collapsed by default (user preference)
 
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -336,7 +376,7 @@ class _CategoryBox(QtWidgets.QWidget):
         icon_lbl.setFixedWidth(_px(16))
         header.addWidget(icon_lbl)
 
-        title = QtWidgets.QLabel(category.replace("_", " ").title())
+        title = QtWidgets.QLabel(category.title())
         title.setStyleSheet(
             "color: #c8c8c8; font-size: %dpx; font-weight: bold;" % _FONT_PX)
         header.addWidget(title)
@@ -366,16 +406,56 @@ class _CategoryBox(QtWidgets.QWidget):
         grid.setHorizontalSpacing(_px(4))
         grid.setVerticalSpacing(0)
         self._rows: Dict[str, _CheckGridRow] = {}
+        base_row = 1 if category == "NAMING" else 0
+        if category == "NAMING":
+            # Inline naming-policy fields take grid row 0; checks start below
+            grid.addWidget(self._build_naming_fields(self._content), 0, 0, 1, 2)
         for i, key in enumerate(keys):
             row = _CheckGridRow(key, self._content)
-            grid.addWidget(row, i // 2, i % 2)
+            grid.addWidget(row, base_row + i // 2, i % 2)
             self._rows[key] = row
         outer.addWidget(self._content)
+        self._content.setVisible(False)   # collapsed by default (user pref)
+
+    def _build_naming_fields(self, parent) -> QtWidgets.QWidget:
+        """Inline Objects prefix/suffix fields (Blender parity, compact)."""
+        w = QtWidgets.QWidget(parent)
+        lay = QtWidgets.QHBoxLayout(w)
+        lay.setContentsMargins(_px(2), _px(2), _px(2), _px(2))
+        lay.setSpacing(_px(3))
+        small = "font-size: %dpx; color: #909090;" % max(1, _FONT_PX - 1)
+        lbl = QtWidgets.QLabel("Obj:")
+        lbl.setStyleSheet(small)
+        lay.addWidget(lbl)
+        self._naming_prefix_edit = QtWidgets.QLineEdit()
+        self._naming_prefix_edit.setPlaceholderText("prefix")
+        self._naming_prefix_edit.setToolTip("Required object-name prefix (scene-wide)")
+        self._naming_prefix_edit.editingFinished.connect(self._on_naming_edited)
+        self._naming_suffix_edit = QtWidgets.QLineEdit()
+        self._naming_suffix_edit.setPlaceholderText("suffix")
+        self._naming_suffix_edit.setToolTip("Required object-name suffix (scene-wide)")
+        self._naming_suffix_edit.editingFinished.connect(self._on_naming_edited)
+        for e in (self._naming_prefix_edit, self._naming_suffix_edit):
+            e.setFixedHeight(_px(20))
+            lay.addWidget(e, stretch=1)
+        return w
+
+    def _on_naming_edited(self) -> None:
+        policy = _core.NamingPolicy
+        policy.set_prefix(self._naming_prefix_edit.text().strip())
+        policy.set_suffix(self._naming_suffix_edit.text().strip())
+        _manager.alog("naming policy: prefix='%s' suffix='%s'"
+                      % (policy.get_prefix(), policy.get_suffix()))
+        _manager.MayaCheck.run_all()
 
     def _on_collapse(self) -> None:
         self._open = not self._open
         self._content.setVisible(self._open)
         self._collapse_btn.setText("▾" if self._open else "▸")
+
+    def set_open(self, open_: bool) -> None:
+        if self._open != open_:
+            self._on_collapse()
 
     def _on_cat_toggle(self, state: int) -> None:
         enabled = (int(state) == 2)
@@ -387,6 +467,16 @@ class _CategoryBox(QtWidgets.QWidget):
         self._cat_toggle.blockSignals(True)
         self._cat_toggle.setChecked(any_on)
         self._cat_toggle.blockSignals(False)
+
+        # Inline naming fields — sync from NamingPolicy
+        if self._category == "NAMING":
+            policy = _core.NamingPolicy
+            for edit, val in ((self._naming_prefix_edit, policy.get_prefix()),
+                              (self._naming_suffix_edit, policy.get_suffix())):
+                edit.blockSignals(True)
+                if edit.text() != val:
+                    edit.setText(val)
+                edit.blockSignals(False)
 
         # Category Fix button — some fixable check has issues on some object
         cat_has_fix = any(
@@ -405,11 +495,14 @@ class _CategoryBox(QtWidgets.QWidget):
                     info_keys.add(k)
         # Re-flow grid so hiding INFO rows doesn't leave empty cells
         visible = [k for k in self._keys if k not in info_keys]
+        base_row = 1 if self._category == "NAMING" else 0
         for i, key in enumerate(visible):
             row = self._rows[key]
             grid = self._content.layout()
             grid.removeWidget(row)
-            grid.addWidget(row, i // 2, i % 2)
+            r = base_row + i // 2
+            c = i % 2
+            grid.addWidget(row, r, c)
             row.setVisible(True)
             row.refresh()
         for key in info_keys:
@@ -431,7 +524,7 @@ class _CategoryBox(QtWidgets.QWidget):
             _manager.MayaCheck.run_all()
 
 
-# ── Per-object detail row: [✓] Label: count  [Sel][Ign][Fix] ─────────────────
+# ── Per-object detail row: [!] Label: count  [Sel][Ign][Fix] ──────────────────
 
 class _DetailCheckRow(QtWidgets.QWidget):
     def __init__(self, key: str, parent=None):
@@ -448,6 +541,7 @@ class _DetailCheckRow(QtWidgets.QWidget):
         layout.addWidget(self._icon)
 
         self._label = QtWidgets.QLabel("")
+        self._label.setWordWrap(False)
         layout.addWidget(self._label, stretch=1)
 
         small = ("QPushButton { font-size: %dpx; padding: %dpx %dpx; }"
@@ -468,22 +562,27 @@ class _DetailCheckRow(QtWidgets.QWidget):
         self._fix_btn = _mini("Fix", "Auto-fix this issue")
         self._fix_btn.clicked.connect(self._on_fix)
 
-    def refresh(self, mco: "_manager.MayaCheckObject") -> None:
+    def refresh(self, mco: "_manager.MayaCheckObject") -> bool:
+        """Show only hot rows (issues + ignored). Returns True if visible."""
         checker = mco.checkers.get(self._key)
         enabled = mco.enabled.get(self._key, False)
-        if not enabled or checker is None or checker.count == 0:
+        if not enabled or checker is None:
             self.setVisible(False)
-            return
-        self.setVisible(True)
+            return False
 
         transform = self._find_transform()
         ignored = bool(
             transform and self._key in _manager.get_ignore_list(transform))
         count = checker.count
+        if count == 0 and not ignored:
+            self.setVisible(False)
+            return False
+        self.setVisible(True)
 
         mt = getattr(checker, "metric_text", "") or ""
         text = mt if mt else "%s: %d" % (
             _CHECK_DISPLAY_NAMES.get(self._key, self._key), count)
+        self.setToolTip(text)
 
         if ignored:
             self._icon.setText("◫")
@@ -495,7 +594,7 @@ class _DetailCheckRow(QtWidgets.QWidget):
             self._fix_btn.setVisible(False)
             self._ign_btn.setText("Un-Ign")
             self._ign_btn.setToolTip("Stop ignoring this issue")
-            return
+            return True
 
         self._ign_btn.setText("Ign")
         self._ign_btn.setToolTip("Ignore this issue (excluded from status)")
@@ -507,6 +606,7 @@ class _DetailCheckRow(QtWidgets.QWidget):
                                   % max(1, _FONT_PX - 1))
         self._sel_btn.setVisible(bool(checker.bad_components))
         self._fix_btn.setVisible(self._key in _FIXABLE)
+        return True
 
     def _on_select(self) -> None:
         mco = self._find_mco()
@@ -541,19 +641,15 @@ class _DetailCheckRow(QtWidgets.QWidget):
         return _manager.MayaCheck.objects.get(t) if t else None
 
 
-# ── Object row: ▸ name  ●status  → expandable details ─────────────────────────
+# ── Object row: [v] name  [dot] status → expandable details ───────────────────
 
 def _obj_stats(transform: str):
     try:
-        shape = cmds.listRelatives(transform, shapes=True, type="mesh",
-                                   fullPath=True) or []
-        if not shape:
-            return (0, 0, 0, 0)
-        v = cmds.polyEvaluate(shape[0], vertex=True) or 0
-        e = cmds.polyEvaluate(shape[0], edge=True) or 0
-        f = cmds.polyEvaluate(shape[0], face=True) or 0
-        t = cmds.polyEvaluate(shape[0], triCount=True) or 0
-        return (int(v), int(e), int(f), int(t))
+        # single query on the TRANSFORM: triCount is invalid on the shape node
+        res = cmds.polyEvaluate(transform, vertex=True, edge=True,
+                                face=True, triangle=True) or {}
+        return (int(res.get("vertex", 0)), int(res.get("edge", 0)),
+                int(res.get("face", 0)), int(res.get("triangle", 0)))
     except Exception:
         return (0, 0, 0, 0)
 
@@ -604,6 +700,11 @@ class _ObjectRow(QtWidgets.QWidget):
             row.setVisible(False)
             detail_layout.addWidget(row)
             self._detail_rows[key] = row
+        # Clean checks collapse into one grey line (Blender parity)
+        self._clean_label = QtWidgets.QLabel("")
+        self._clean_label.setStyleSheet(
+            "color: #6a6a6a; font-size: %dpx;" % max(1, _FONT_PX - 1))
+        detail_layout.addWidget(self._clean_label)
         self._detail.setVisible(False)
         outer.addWidget(self._detail)
 
@@ -611,6 +712,9 @@ class _ObjectRow(QtWidgets.QWidget):
         self._open = not self._open
         self._detail.setVisible(self._open)
         self._expand_btn.setText("▾" if self._open else "▸")
+        mco = _manager.MayaCheck.objects.get(self._transform)
+        if self._open and mco:
+            self.refresh(mco)   # detail rows only render while open
 
     def set_open(self, open_: bool) -> None:
         if self._open != open_:
@@ -649,10 +753,16 @@ class _ObjectRow(QtWidgets.QWidget):
         if self._open:
             v, e, f, t = _obj_stats(self._transform)
             self._stats_label.setText(f"V: {v}  E: {e}  F: {f}  T: {t}")
+            n_clean = 0
             for row in self._detail_rows.values():
-                row.refresh(mco)
-
-
+                shown = row.refresh(mco)
+                if not shown:
+                    key = row._key
+                    if mco.enabled.get(key) and key not in ignored:
+                        n_clean += 1
+            self._clean_label.setText(
+                "%d checks clean" % n_clean if n_clean else "")
+            self._clean_label.setVisible(bool(n_clean))
 
 
 # ── Ignored Issues block (Blender parity) ─────────────────────────────────────
@@ -777,11 +887,17 @@ class StukachPanel(QtWidgets.QWidget):
         self._issues_only = False
 
         self._build_ui()
-        # Fill the dock vertically — without this the panel reports a small
-        # sizeHint and the dock opens at ~1/3 of the window height
+        # Fill the window vertically — without this the panel reports a small
+        # sizeHint and reopens at ~1/3 of the saved height
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
                            QtWidgets.QSizePolicy.Expanding)
         _manager.MayaCheck._ui_callback = self.refresh
+
+        # Live-mode tick (panel-owned so hot-reload kills it with the panel)
+        self._live_timer = QtCore.QTimer(self)
+        self._live_timer.setInterval(1000)
+        self._live_timer.timeout.connect(self._on_live_tick)
+        self._live_timer.start()
 
     # ── construction ──────────────────────────────────────────────────────────
 
@@ -790,21 +906,39 @@ class StukachPanel(QtWidgets.QWidget):
         root.setContentsMargins(_px(6), _px(6), _px(6), _px(6))
         root.setSpacing(_px(4))
 
-        # ── header: title + subtitle (Blender panel header) ──
+        self._stack = QtWidgets.QStackedWidget()
+        root.addWidget(self._stack, stretch=1)
+
+        artist_page = QtWidgets.QWidget()
+        artist_layout = QtWidgets.QVBoxLayout(artist_page)
+        artist_layout.setContentsMargins(0, 0, 0, 0)
+        artist_layout.setSpacing(_px(4))
+        self._stack.addWidget(artist_page)
+
+        coord_page = QtWidgets.QWidget()
+        self._coord_layout = QtWidgets.QVBoxLayout(coord_page)
+        self._coord_layout.setContentsMargins(0, 0, 0, 0)
+        self._coord_layout.setSpacing(_px(4))
+        self._stack.addWidget(coord_page)
+
+        self._build_artist_page(artist_layout)
+        self._build_coordinator_page(self._coord_layout)
+        self._build_delivery_box(root)   # shared by both pages
+
+    def _build_artist_page(self, root: QtWidgets.QVBoxLayout) -> None:
+        # ── header: title + subtitle ──
         title_box = QtWidgets.QVBoxLayout()
         title_box.setSpacing(0)
-        title = QtWidgets.QLabel("STUKACH")
+        title = QtWidgets.QLabel("STUKACH v%s" % _VERSION)
         title.setStyleSheet("color: #e5e5e5; font-size: %dpx; font-weight: bold;"
                             % _px(15))
         title_box.addWidget(title)
-        subtitle = QtWidgets.QLabel("pipeline snitch system")
+        subtitle = QtWidgets.QLabel("Pipeline Snitch System")
         subtitle.setStyleSheet("color: #909090; font-size: %dpx;" % _px(10))
         title_box.addWidget(subtitle)
         root.addLayout(title_box)
 
-        # ── RUN toggle + coordinator (Blender run_row) ──
-        run_row = QtWidgets.QHBoxLayout()
-        run_row.setSpacing(_px(3))
+        # ── RUN toggle (full width, blue) ──
         self._run_btn = QtWidgets.QPushButton("RUN STUKACH")
         self._run_btn.setCheckable(True)
         self._run_btn.setFixedHeight(_px(34))
@@ -812,14 +946,26 @@ class StukachPanel(QtWidgets.QWidget):
         self._run_btn.setStyleSheet(
             "QPushButton { background: %s; color: #fff; font-weight: bold; }"
             "QPushButton:hover { background: #5683c8; }" % _C_SELECT)
-        run_row.addWidget(self._run_btn, stretch=1)
-        self._coord_btn = QtWidgets.QPushButton("◎")
-        self._coord_btn.setCheckable(True)
-        self._coord_btn.setFixedSize(_px(34), _px(34))
-        self._coord_btn.setToolTip("Coordinator mode: hide INFO, pipeline gate")
-        self._coord_btn.clicked.connect(self._on_coordinator_toggled)
-        run_row.addWidget(self._coord_btn)
-        root.addLayout(run_row)
+        root.addWidget(self._run_btn)
+
+        # ── mode toolbar: [Coordinator Mode | Live] ──
+        mode_row = QtWidgets.QHBoxLayout()
+        mode_row.setSpacing(_px(2))
+        self._mode_coord_btn = QtWidgets.QPushButton("Coordinator Mode")
+        self._mode_coord_btn.setCheckable(True)
+        self._mode_coord_btn.setFixedHeight(_px(24))
+        self._mode_coord_btn.setToolTip(
+            "Coordinator mode: hide INFO checks, gate view + Copy Report")
+        self._mode_coord_btn.clicked.connect(self._on_coordinator_toggled)
+        mode_row.addWidget(self._mode_coord_btn, stretch=1)
+        self._mode_live_btn = QtWidgets.QPushButton("Live")
+        self._mode_live_btn.setCheckable(True)
+        self._mode_live_btn.setFixedHeight(_px(24))
+        self._mode_live_btn.setToolTip(
+            "Live mode: revalidate dirty objects every second")
+        self._mode_live_btn.clicked.connect(self._on_live_toggled)
+        mode_row.addWidget(self._mode_live_btn, stretch=1)
+        root.addLayout(mode_row)
 
         # isolate badge (Shift+click on a check)
         self._isolate_badge = QtWidgets.QLabel("")
@@ -830,49 +976,47 @@ class StukachPanel(QtWidgets.QWidget):
         self._isolate_badge.setVisible(False)
         root.addWidget(self._isolate_badge)
 
-        # ── score box ──
+        # ── score block ──
         self._score_widget = QtWidgets.QWidget()
         score_layout = QtWidgets.QVBoxLayout(self._score_widget)
         score_layout.setContentsMargins(_px(2), _px(2), _px(2), _px(2))
         score_layout.setSpacing(_px(2))
 
-        self._score_line1 = QtWidgets.QHBoxLayout()
-        self._score_line1.setSpacing(_px(5))
+        line1 = QtWidgets.QHBoxLayout()
+        line1.setSpacing(_px(5))
         self._score_icon = _StatusDot(self._score_widget)
-        self._score_line1.addWidget(self._score_icon)
+        line1.addWidget(self._score_icon)
         self._score_text = QtWidgets.QLabel("Awaiting suspects.")
         self._score_text.setStyleSheet(
             "color: #a0a0a0; font-size: %dpx; font-style: italic;" % _FONT_PX)
-        self._score_line1.addWidget(self._score_text)
-        self._score_line1.addStretch()
+        line1.addWidget(self._score_text)
+        line1.addStretch()
         self._score_scope = QtWidgets.QLabel("")
         self._score_scope.setStyleSheet(
             "color: #909090; font-size: %dpx;" % max(1, _FONT_PX - 2))
-        self._score_line1.addWidget(self._score_scope)
-        score_layout.addLayout(self._score_line1)
+        line1.addWidget(self._score_scope)
+        score_layout.addLayout(line1)
 
-        self._score_badges_row = QtWidgets.QHBoxLayout()
-        self._score_badges_row.setSpacing(_px(7))
-        self._cat_badges: Dict[str, QtWidgets.QLabel] = {}
-        for cat in _core.CHECK_CATEGORIES:
-            badge_box = QtWidgets.QHBoxLayout()
-            badge_box.setSpacing(_px(2))
-            dot = _StatusDot(self._score_widget, size=7)
-            badge_box.addWidget(dot)
-            lbl = QtWidgets.QLabel(f"{cat[:4]}: 0")
-            lbl.setStyleSheet("color: #909090; font-size: %dpx;"
-                              % max(1, _FONT_PX - 2))
-            badge_box.addWidget(lbl)
-            wrap = QtWidgets.QWidget()
-            wrap.setLayout(badge_box)
-            self._score_badges_row.addWidget(wrap)
-            self._cat_badges[cat] = lbl
-            setattr(lbl, "_dot", dot)  # companion dot
-        self._score_badges_row.addStretch()
-        score_layout.addLayout(self._score_badges_row)
+        self._health_strip = _HealthStrip(self._score_widget)
+        score_layout.addWidget(self._health_strip)
+
+        actions_row = QtWidgets.QHBoxLayout()
+        actions_row.setSpacing(_px(3))
+        self._next_issue_btn = QtWidgets.QPushButton("Next Issue")
+        self._next_issue_btn.setFixedHeight(_px(22))
+        self._next_issue_btn.setToolTip(
+            "Jump to the next problem object (worst-first cycle)")
+        self._next_issue_btn.clicked.connect(self._on_next_issue)
+        actions_row.addWidget(self._next_issue_btn, stretch=1)
+        self._copy_btn = QtWidgets.QPushButton("Copy Summary")
+        self._copy_btn.setFixedHeight(_px(22))
+        self._copy_btn.setToolTip("Copy validation summary to clipboard")
+        self._copy_btn.clicked.connect(self._on_copy_summary)
+        actions_row.addWidget(self._copy_btn, stretch=1)
+        score_layout.addLayout(actions_row)
         root.addWidget(self._score_widget)
 
-        # ── scope row: Scene | Selected | ✕ ──
+        # ── scope row: Scene | Selected | x ──
         scope_row = QtWidgets.QHBoxLayout()
         scope_row.setSpacing(_px(2))
         self._scope_group = QtWidgets.QButtonGroup(self)
@@ -894,11 +1038,12 @@ class StukachPanel(QtWidgets.QWidget):
         scope_row.addWidget(self._clear_btn)
         root.addLayout(scope_row)
 
-        # ── compact batch row (Maya-specific, dim) ──
+        # ── compact batch row ──
         batch_row = QtWidgets.QHBoxLayout()
         batch_row.setSpacing(_px(2))
         small_qss = ("QPushButton { font-size: %dpx; padding: %dpx %dpx; }"
                      % (max(1, _FONT_PX - 2), _px(1), _px(5)))
+        self._small_qss = small_qss
 
         def _small(text, tooltip, slot):
             b = QtWidgets.QPushButton(text)
@@ -915,46 +1060,16 @@ class StukachPanel(QtWidgets.QWidget):
         _small("Wrn", "BLOCKER + WARNING", lambda: _manager.MayaCheck.enable_by_severity({"BLOCKER", "WARNING"}))
         batch_row.addStretch()
 
-        self._preset_combo = QtWidgets.QComboBox()
-        self._preset_combo.setFixedHeight(_px(20))
-        self._preset_combo.setMinimumWidth(_px(70))
-        self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
-        batch_row.addWidget(self._preset_combo)
-
-        def _mini(text, tooltip):
-            b = QtWidgets.QPushButton(text)
-            b.setFixedSize(_px(22), _px(20))
-            b.setStyleSheet(small_qss)
-            b.setToolTip(tooltip)
-            batch_row.addWidget(b)
-            return b
-
-        self._preset_save_btn = _mini("S", "Save preset")
-        self._preset_save_btn.clicked.connect(self._on_preset_save)
-        self._preset_del_btn = _mini("D", "Delete preset")
-        self._preset_del_btn.clicked.connect(self._on_preset_delete)
-
         self._overlay_cb = QtWidgets.QCheckBox("Viewport")
         self._overlay_cb.setChecked(True)
         self._overlay_cb.setToolTip("Viewport overlay on/off")
         self._overlay_cb.stateChanged.connect(self._on_overlay_toggled)
         batch_row.addWidget(self._overlay_cb)
         root.addLayout(batch_row)
-        self._refresh_preset_combo()
 
         # ── scene units row ──
-        units_row = QtWidgets.QHBoxLayout()
-        units_row.setSpacing(_px(4))
-        self._units_toggle = QtWidgets.QCheckBox("Scene Units")
-        self._units_toggle.setToolTip("Check scene units: METRIC · m · scale 1.0")
-        self._units_toggle.stateChanged.connect(self._on_units_toggled)
-        units_row.addWidget(self._units_toggle)
-        units_row.addStretch()
-        self._units_status = QtWidgets.QLabel("")
-        self._units_status.setStyleSheet(
-            "color: #909090; font-size: %dpx;" % max(1, _FONT_PX - 1))
-        units_row.addWidget(self._units_status)
-        root.addLayout(units_row)
+        self._units_rows = []
+        root.addLayout(self._build_units_row())
 
         # ── scroll: Pipeline Checks + Objects ──
         scroll = QtWidgets.QScrollArea()
@@ -970,14 +1085,82 @@ class StukachPanel(QtWidgets.QWidget):
             "color: #c8c8c8; font-size: %dpx; font-weight: bold;" % _FONT_PX)
         cont_layout.addWidget(checks_lbl)
 
+        self._checks_layout = cont_layout
         self._category_boxes: Dict[str, _CategoryBox] = {}
         for cat, keys in _core.CHECK_CATEGORIES.items():
             box = _CategoryBox(cat, keys)
-            box._on_collapse()   # all categories collapsed by default
             cont_layout.addWidget(box)
             self._category_boxes[cat] = box
 
+        # ── presets row (inside Pipeline Checks, Blender parity) ──
+        presets_row = QtWidgets.QHBoxLayout()
+        presets_row.setSpacing(_px(2))
+        self._preset_combo = QtWidgets.QComboBox()
+        self._preset_combo.setFixedHeight(_px(20))
+        self._preset_combo.setMinimumWidth(_px(70))
+        self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
+        presets_row.addWidget(self._preset_combo, stretch=1)
+        self._preset_save_btn = QtWidgets.QPushButton("S")
+        self._preset_save_btn.setFixedSize(_px(22), _px(20))
+        self._preset_save_btn.setStyleSheet(small_qss)
+        self._preset_save_btn.setToolTip("Save preset")
+        self._preset_save_btn.clicked.connect(self._on_preset_save)
+        presets_row.addWidget(self._preset_save_btn)
+        self._preset_del_btn = QtWidgets.QPushButton("D")
+        self._preset_del_btn.setFixedSize(_px(22), _px(20))
+        self._preset_del_btn.setStyleSheet(small_qss)
+        self._preset_del_btn.setToolTip("Delete preset")
+        self._preset_del_btn.clicked.connect(self._on_preset_delete)
+        presets_row.addWidget(self._preset_del_btn)
+        self._presets_widget = QtWidgets.QWidget()
+        self._presets_widget.setLayout(presets_row)
+        cont_layout.addWidget(self._presets_widget)
+        self._refresh_preset_combo()
+
         # ── Objects section (collapsible) ──
+        self._build_objects_section(cont_layout)
+
+        self._ignored_box = _IgnoredBox()
+        self._ignored_box.setVisible(False)
+        cont_layout.addWidget(self._ignored_box)
+        cont_layout.addStretch()
+        scroll.setWidget(container)
+        root.addWidget(scroll, stretch=1)
+
+        # ── asset status box (artist page) ──
+        self._verdict_widget = QtWidgets.QWidget()
+        verdict_layout = QtWidgets.QVBoxLayout(self._verdict_widget)
+        verdict_layout.setContentsMargins(_px(2), _px(4), _px(2), _px(4))
+        verdict_layout.setSpacing(0)
+        self._verdict_headline = QtWidgets.QLabel("No active checks.")
+        self._verdict_headline.setAlignment(Qt.AlignCenter)
+        self._verdict_headline.setStyleSheet(
+            "color: #909090; font-size: %dpx; font-weight: bold;" % _FONT_PX)
+        verdict_layout.addWidget(self._verdict_headline)
+        self._verdict_subtext = QtWidgets.QLabel("")
+        self._verdict_subtext.setAlignment(Qt.AlignCenter)
+        self._verdict_subtext.setStyleSheet(
+            "color: #909090; font-size: %dpx;" % max(1, _FONT_PX - 2))
+        verdict_layout.addWidget(self._verdict_subtext)
+        root.addWidget(self._verdict_widget)
+
+    def _build_units_row(self) -> None:
+        """Scene Units check + status label (used on both pages)."""
+        units_row = QtWidgets.QHBoxLayout()
+        units_row.setSpacing(_px(4))
+        toggle = QtWidgets.QCheckBox("Scene Units")
+        toggle.setToolTip("Check scene units: METRIC · m · scale 1.0")
+        toggle.stateChanged.connect(self._on_units_toggled)
+        units_row.addWidget(toggle)
+        units_row.addStretch()
+        status = QtWidgets.QLabel("")
+        status.setStyleSheet(
+            "color: #909090; font-size: %dpx;" % max(1, _FONT_PX - 1))
+        units_row.addWidget(status)
+        self._units_rows.append((toggle, status))
+        return units_row
+
+    def _build_objects_section(self, cont_layout: QtWidgets.QVBoxLayout) -> None:
         self._objects_box = QtWidgets.QWidget()
         obj_outer = QtWidgets.QVBoxLayout(self._objects_box)
         obj_outer.setContentsMargins(0, 0, 0, 0)
@@ -1019,24 +1202,21 @@ class StukachPanel(QtWidgets.QWidget):
         filt_row = QtWidgets.QHBoxLayout()
         filt_row.setSpacing(_px(3))
         self._filter_edit = QtWidgets.QLineEdit()
-        self._filter_edit.setPlaceholderText("Filter…")
+        self._filter_edit.setPlaceholderText("Search objects")
         self._filter_edit.setFixedHeight(_px(22))
         self._filter_edit.textChanged.connect(self._on_filter_changed)
         filt_row.addWidget(self._filter_edit, stretch=1)
-        self._issues_only_btn = QtWidgets.QPushButton("Issues only")
+        self._issues_only_btn = QtWidgets.QPushButton("Issues")
         self._issues_only_btn.setCheckable(True)
         self._issues_only_btn.setFixedHeight(_px(22))
+        self._issues_only_btn.setToolTip("Show only objects with issues")
         self._issues_only_btn.clicked.connect(self._on_issues_only)
         filt_row.addWidget(self._issues_only_btn)
-        self._filter_count = QtWidgets.QLabel("0 / 0")
-        self._filter_count.setStyleSheet(
-            "color: #909090; font-size: %dpx;" % max(1, _FONT_PX - 2))
-        filt_row.addWidget(self._filter_count)
         oc_layout.addLayout(filt_row)
 
         self._expand_all_btn = QtWidgets.QPushButton("Expand All")
         self._expand_all_btn.setFixedHeight(_px(20))
-        self._expand_all_btn.setStyleSheet(small_qss)
+        self._expand_all_btn.setStyleSheet(self._small_qss)
         self._expand_all_btn.clicked.connect(self._on_expand_all)
         oc_layout.addWidget(self._expand_all_btn)
 
@@ -1049,45 +1229,85 @@ class StukachPanel(QtWidgets.QWidget):
         self._objects_content.setVisible(False)   # collapsed by default
         cont_layout.addWidget(self._objects_box)
 
-        self._ignored_box = _IgnoredBox()
-        self._ignored_box.setVisible(False)
-        cont_layout.addWidget(self._ignored_box)
-        cont_layout.addStretch()
-        scroll.setWidget(container)
-        root.addWidget(scroll, stretch=1)
+    def _build_coordinator_page(self, root: QtWidgets.QVBoxLayout) -> None:
+        title = QtWidgets.QLabel("Coordinator Mode")
+        title.setStyleSheet(
+            "color: #c8c8c8; font-size: %dpx; font-weight: bold;" % _px(14))
+        root.addWidget(title)
 
-        # ── asset status box ──
-        self._verdict_widget = QtWidgets.QWidget()
-        verdict_layout = QtWidgets.QVBoxLayout(self._verdict_widget)
-        verdict_layout.setContentsMargins(_px(2), _px(4), _px(2), _px(4))
-        verdict_layout.setSpacing(0)
-        self._verdict_headline = QtWidgets.QLabel("No active checks.")
-        self._verdict_headline.setAlignment(Qt.AlignCenter)
-        self._verdict_headline.setStyleSheet(
-            "color: #909090; font-size: %dpx; font-weight: bold;" % _FONT_PX)
-        verdict_layout.addWidget(self._verdict_headline)
-        self._verdict_subtext = QtWidgets.QLabel("")
-        self._verdict_subtext.setAlignment(Qt.AlignCenter)
-        self._verdict_subtext.setStyleSheet(
+        # ── status badge ──
+        self._gate_widget = QtWidgets.QWidget()
+        gate_layout = QtWidgets.QVBoxLayout(self._gate_widget)
+        gate_layout.setContentsMargins(_px(4), _px(4), _px(4), _px(4))
+        gate_layout.setSpacing(0)
+        self._gate_headline = QtWidgets.QLabel("Run validation first")
+        self._gate_headline.setAlignment(Qt.AlignCenter)
+        self._gate_headline.setStyleSheet(
+            "color: #909090; font-size: %dpx; font-weight: bold;" % _px(13))
+        gate_layout.addWidget(self._gate_headline)
+        self._gate_subtext = QtWidgets.QLabel("")
+        self._gate_subtext.setAlignment(Qt.AlignCenter)
+        self._gate_subtext.setStyleSheet(
             "color: #909090; font-size: %dpx;" % max(1, _FONT_PX - 2))
-        verdict_layout.addWidget(self._verdict_subtext)
-        root.addWidget(self._verdict_widget)
+        gate_layout.addWidget(self._gate_subtext)
+        root.addWidget(self._gate_widget)
 
-        # ── export box ──
+        # ── units + scope rows (coordinator's own instances) ──
+        root.addLayout(self._build_units_row())
+        coord_scope_row = QtWidgets.QHBoxLayout()
+        coord_scope_row.setSpacing(_px(2))
+        self._coord_scope_scene_btn = QtWidgets.QPushButton("Scene")
+        self._coord_scope_selected_btn = QtWidgets.QPushButton("Selected")
+        for btn in (self._coord_scope_scene_btn, self._coord_scope_selected_btn):
+            btn.setCheckable(True)
+            btn.setFixedHeight(_px(24))
+            if btn is self._coord_scope_scene_btn:
+                btn.clicked.connect(lambda: self._on_scope_changed("SCENE"))
+            else:
+                btn.clicked.connect(lambda: self._on_scope_changed("SELECTED"))
+            coord_scope_row.addWidget(btn, stretch=1)
+        self._coord_scope_clear_btn = QtWidgets.QPushButton("✕")
+        self._coord_scope_clear_btn.setFixedSize(_px(26), _px(24))
+        self._coord_scope_clear_btn.setToolTip("Stop validation and clear results")
+        self._coord_scope_clear_btn.clicked.connect(self._on_stop)
+        coord_scope_row.addWidget(self._coord_scope_clear_btn)
+        root.addLayout(coord_scope_row)
+
+        self._copy_report_btn = QtWidgets.QPushButton("Copy Report")
+        self._copy_report_btn.setFixedHeight(_px(26))
+        self._copy_report_btn.setToolTip(
+            "Verdict report for the task: VALIDATION + BLOCKERS/WARNINGS")
+        self._copy_report_btn.clicked.connect(self._on_copy_summary)
+        root.addWidget(self._copy_report_btn)
+
+        cw_lbl = QtWidgets.QLabel("Critical & Warning Checks:")
+        cw_lbl.setStyleSheet(
+            "color: #c8c8c8; font-size: %dpx; font-weight: bold;" % _FONT_PX)
+        root.addWidget(cw_lbl)
+        self._coord_checks_container = QtWidgets.QWidget()
+        self._coord_checks_layout = QtWidgets.QVBoxLayout(self._coord_checks_container)
+        self._coord_checks_layout.setContentsMargins(0, 0, 0, 0)
+        self._coord_checks_layout.setSpacing(_px(3))
+        root.addWidget(self._coord_checks_container)
+        root.addStretch()
+
+    def _build_delivery_box(self, root: QtWidgets.QVBoxLayout) -> None:
+        sep = QtWidgets.QFrame()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background: #2a2a2a;")
+        root.addWidget(sep)
+
         export_box = QtWidgets.QWidget()
-        exp_sep = QtWidgets.QFrame()
-        exp_sep.setFixedHeight(1)
-        exp_sep.setStyleSheet("background: #2a2a2a;")
-        root.addWidget(exp_sep)
         exp_layout = QtWidgets.QVBoxLayout(export_box)
         exp_layout.setContentsMargins(_px(2), _px(4), _px(2), _px(2))
         exp_layout.setSpacing(_px(3))
 
+        lbl_w = _px(58)
         row1 = QtWidgets.QHBoxLayout()
         row1.setSpacing(_px(3))
         lbl1 = QtWidgets.QLabel("Export:")
         lbl1.setStyleSheet("color: #a0a0a0;")
-        lbl1.setFixedWidth(_px(58))
+        lbl1.setFixedWidth(lbl_w)
         row1.addWidget(lbl1)
         for fmt in ("JSON", "CSV", "HTML"):
             b = QtWidgets.QPushButton(fmt)
@@ -1100,13 +1320,29 @@ class StukachPanel(QtWidgets.QWidget):
         row2.setSpacing(_px(3))
         lbl2 = QtWidgets.QLabel("Pre-flight:")
         lbl2.setStyleSheet("color: #a0a0a0;")
-        lbl2.setFixedWidth(_px(58))
+        lbl2.setFixedWidth(lbl_w)
         row2.addWidget(lbl2)
         b_fbx = QtWidgets.QPushButton("FBX")
         b_fbx.setFixedHeight(_px(22))
+        b_fbx.setToolTip("Pre-flight gate, then FBX export")
         b_fbx.clicked.connect(self._on_publish)
         row2.addWidget(b_fbx, stretch=1)
         exp_layout.addLayout(row2)
+
+        dbg_row = QtWidgets.QHBoxLayout()
+        dbg_row.addStretch()
+        self._debug_btn = QtWidgets.QPushButton("Debug Info")
+        self._debug_btn.setFixedHeight(_px(18))
+        self._debug_btn.setStyleSheet(
+            "QPushButton { color: #8c8c8c; font-size: %dpx; padding: 0 %dpx; "
+            "border: none; background: transparent; }"
+            "QPushButton:hover { color: #e6e6e6; }"
+            % (max(1, _FONT_PX - 2), _px(5)))
+        self._debug_btn.setToolTip(
+            "Copy versions, state and session log to clipboard (bug reports)")
+        self._debug_btn.clicked.connect(self._on_debug_info)
+        dbg_row.addWidget(self._debug_btn)
+        exp_layout.addLayout(dbg_row)
         root.addWidget(export_box)
 
     # ── slots ──
@@ -1135,11 +1371,42 @@ class StukachPanel(QtWidgets.QWidget):
         _manager.MayaCheck.set_overlay_enabled(int(state) == 2)
 
     def _on_coordinator_toggled(self) -> None:
-        _manager.MayaCheck.set_coordinator_mode(self._coord_btn.isChecked())
-        self.refresh()
+        _manager.MayaCheck.set_coordinator_mode(self._mode_coord_btn.isChecked())
+
+    def _on_live_toggled(self) -> None:
+        _manager.MayaCheck.set_live(self._mode_live_btn.isChecked())
+
+    def _on_live_tick(self) -> None:
+        mc = _manager.MayaCheck
+        if not mc.live or not mc._running:
+            return
+        if QtWidgets.QApplication.activeModalWidget() is not None:
+            return   # never revalidate under a modal dialog
+        mc.live_tick()
 
     def _on_units_toggled(self, state: int) -> None:
         self._update_scene_units(int(state) == 2)
+
+    def _on_next_issue(self) -> None:
+        target = _manager.MayaCheck.next_issue()
+        if target:
+            self._next_issue_btn.setToolTip(
+                "Next: %s" % target.split("|")[-1])
+
+    def _on_copy_summary(self) -> None:
+        text = _manager.MayaCheck.build_summary_text()
+        clipboard = QtWidgets.QApplication.clipboard()
+        clipboard.setText(text)
+        cmds.inViewMessage(amg="STUKACH: summary copied to clipboard",
+                           pos="topCenter", fade=True)
+        _manager.alog("summary copied to clipboard (%d chars)" % len(text))
+
+    def _on_debug_info(self) -> None:
+        text = _manager.MayaCheck.get_debug_info()
+        clipboard = QtWidgets.QApplication.clipboard()
+        clipboard.setText(text)
+        cmds.inViewMessage(amg="STUKACH: debug info copied to clipboard",
+                           pos="topCenter", fade=True)
 
     def _on_objects_collapse(self) -> None:
         self._objects_open = not self._objects_open
@@ -1231,13 +1498,6 @@ class StukachPanel(QtWidgets.QWidget):
         if path:
             mc.publish_fbx(path)
 
-    @undo_decorator
-    def _on_add_selected(self) -> None:
-        sel = cmds.ls(selection=True, long=True, type='transform') or []
-        for t in sel:
-            _manager.MayaCheck.add_object(t)
-        _manager.MayaCheck.run_all()
-
     # ── refresh ───────────────────────────────────────────────────────────────
 
     def refresh(self) -> None:
@@ -1259,11 +1519,52 @@ class StukachPanel(QtWidgets.QWidget):
         self._run_btn.setText("STUKACH ACTIVE" if running else "RUN STUKACH")
         self._run_btn.blockSignals(False)
 
+        # mode toolbar + page stack + category box parenting
+        coord = mc.coordinator_mode
+        self._mode_coord_btn.blockSignals(True)
+        self._mode_coord_btn.setChecked(coord)
+        self._mode_coord_btn.setText("Artist Mode" if coord else "Coordinator Mode")
+        self._mode_coord_btn.blockSignals(False)
+        self._stack.setCurrentIndex(1 if coord else 0)
+        parent_layout = self._coord_checks_layout if coord else self._checks_layout
+        if self._category_boxes:
+            first = next(iter(self._category_boxes.values()))
+            if first.parent() is not (parent_layout.parentWidget()
+                                      if parent_layout is not None else None):
+                for i, box in enumerate(self._category_boxes.values()):
+                    box.setParent(None)
+                    if coord:
+                        parent_layout.addWidget(box)
+                    else:
+                        # artist page: categories must sit between the
+                        # "Pipeline Checks:" label and the presets row
+                        parent_layout.insertWidget(1 + i, box)
+                    box.setVisible(True)   # setParent(None) hides the widget
+
+        # scope buttons on both pages
+        scene_checked = (mc.scope == "SCENE")
+        for scene_btn, selected_btn in (
+                (self._scope_scene_btn, self._scope_selected_btn),
+                (self._coord_scope_scene_btn, self._coord_scope_selected_btn)):
+            scene_btn.blockSignals(True)
+            selected_btn.blockSignals(True)
+            scene_btn.setChecked(scene_checked)
+            selected_btn.setChecked(not scene_checked)
+            scene_btn.blockSignals(False)
+            selected_btn.blockSignals(False)
+
+        # live button state
+        self._mode_live_btn.blockSignals(True)
+        self._mode_live_btn.setChecked(mc.live)
+        self._mode_live_btn.blockSignals(False)
+
         for box in self._category_boxes.values():
             box.refresh()
-        self._refresh_objects(mc)
+        if not coord:
+            self._refresh_objects(mc)
         self._update_score_block(mc)
-        self._update_scene_units(self._units_toggle.isChecked())
+        self._update_scene_units(self._units_rows[0][0].isChecked())
+        self._ignored_box.refresh()
 
     def _refresh_objects(self, mc) -> None:
         current = set(mc.objects.keys())
@@ -1284,10 +1585,20 @@ class StukachPanel(QtWidgets.QWidget):
                 row.refresh(mco)
                 if row._status != "clean":
                     n_issues += 1
-        self._ignored_box.refresh()
-        self._objects_count.setText(str(len(self._obj_rows)))
-        self._objects_issues.setText(f"⚠ {n_issues}" if n_issues else "")
+        self._objects_issues.setText("%d" % n_issues if n_issues else "")
         self._apply_filter()
+        self._sort_rows_worst_first()
+
+    def _sort_rows_worst_first(self) -> None:
+        """Reorder visible rows: critical, then warning, then clean, then name."""
+        order = {"critical": 0, "warning": 1, "clean": 2}
+        rows = sorted(
+            self._obj_rows.values(),
+            key=lambda r: (order.get(r._status, 3), r._transform.split("|")[-1]))
+        for row in rows:
+            self._obj_list_layout.removeWidget(row)
+        for row in rows:
+            self._obj_list_layout.addWidget(row)
 
     def _apply_filter(self) -> None:
         visible = 0
@@ -1300,46 +1611,55 @@ class StukachPanel(QtWidgets.QWidget):
             row.setVisible(ok)
             if ok:
                 visible += 1
-        self._filter_count.setText(f"{visible} / {total}")
+        if self._filter_text or self._issues_only:
+            self._objects_count.setText(f"{visible} / {total}")
+        else:
+            self._objects_count.setText(str(total))
 
     def _update_scene_units(self, enabled: bool) -> None:
         if not enabled:
-            self._units_status.setText("")
+            for _toggle, status in self._units_rows:
+                status.setText("")
             return
         try:
             res = _core.check_scene_units()
         except Exception:
-            self._units_status.setText("?")
+            for _toggle, status in self._units_rows:
+                status.setText("?")
             return
-        if res.get("ok"):
-            self._units_status.setText("METRIC · m · 1.0")
-            self._units_status.setStyleSheet(
-                "color: #477a3c; font-size: %dpx;" % max(1, _FONT_PX - 1))
-        else:
-            issues = " · ".join(res.get("issues", ["issues"]))
-            self._units_status.setText(issues)
-            self._units_status.setStyleSheet(
-                "color: #ad4133; font-size: %dpx;" % max(1, _FONT_PX - 1))
+        for _toggle, status in self._units_rows:
+            if res.get("ok"):
+                status.setText("METRIC · m · 1.0")
+                status.setStyleSheet(
+                    "color: #477a3c; font-size: %dpx;" % max(1, _FONT_PX - 1))
+            else:
+                issues = " · ".join(res.get("issues", ["issues"]))
+                status.setText(issues)
+                status.setStyleSheet(
+                    "color: #ad4133; font-size: %dpx;" % max(1, _FONT_PX - 1))
 
     def _update_score_block(self, mc) -> None:
-        """Score block (top) + asset status (bottom) — Blender format."""
+        """Score block + health strip + asset status / coordinator gate."""
         fs1 = _FONT_PX
         fs2 = max(1, _FONT_PX - 2)
+        summary = mc.category_summary()
+        self._health_strip.refresh(summary)
+
+        coord = mc.coordinator_mode
         if not mc.objects:
             self._score_text.setText("Awaiting suspects.")
             self._score_text.setStyleSheet(
                 f"color: #a0a0a0; font-size: {fs1}px; font-style: italic;")
             self._score_icon.set_color(_C_GREY)
             self._score_scope.setText("")
-            for lbl in self._cat_badges.values():
-                lbl.setText(f"{lbl.text().split(':')[0]}: 0")
-                lbl.setStyleSheet(f"color: #6a6a6a; font-size: {fs2}px;")
-                getattr(lbl, "_dot").set_color("#4a4a4a")
             self._verdict_headline.setText("No active checks.")
             self._verdict_headline.setStyleSheet(
                 f"color: #909090; font-size: {fs1}px; font-weight: bold;")
             self._verdict_subtext.setText("")
-            self._verdict_widget.setStyleSheet("")
+            self._gate_headline.setText("Run validation first")
+            self._gate_headline.setStyleSheet(
+                f"color: #909090; font-size: {fs1}px; font-weight: bold;")
+            self._gate_subtext.setText("")
             return
 
         b = mc.total_blockers()
@@ -1364,63 +1684,35 @@ class StukachPanel(QtWidgets.QWidget):
         self._score_scope.setText(scope_text)
         self._score_scope.setStyleSheet(f"color: #909090; font-size: {fs2}px;")
 
-        for cat, keys in _core.CHECK_CATEGORIES.items():
-            cat_b = cat_w = 0
-            for obj_mco in mc.objects.values():
-                obj_ignored = _manager.get_ignore_list(obj_mco.transform)
-                for k in keys:
-                    if not obj_mco.enabled.get(k) or k in obj_ignored:
-                        continue
-                    checker = obj_mco.checkers.get(k)
-                    if not checker or checker.count == 0:
-                        continue
-                    sev = _core.CHECK_SEVERITIES.get(k)
-                    if sev == "BLOCKER":
-                        cat_b += checker.count
-                    elif sev == "WARNING":
-                        cat_w += checker.count
-            badge = self._cat_badges.get(cat)
-            if badge is None:
-                continue
-            total = cat_b + cat_w
-            badge.setText(f"{cat[:4]}: {total}")
-            dot = getattr(badge, "_dot")
-            if cat_b:
-                badge.setStyleSheet(f"color: #ad4133; font-size: {fs2}px;")
-                dot.set_color(_C_RED)
-            elif cat_w:
-                badge.setStyleSheet(f"color: #b0a060; font-size: {fs2}px;")
-                dot.set_color(_C_YELLOW)
-            else:
-                badge.setStyleSheet(f"color: #6a6a6a; font-size: {fs2}px;")
-                dot.set_color("#4a4a4a")
-
-        # Asset status
+        # Asset status (artist) / gate badge (coordinator)
         status = mc.asset_status()
         if status == "CRITICAL":
-            self._verdict_headline.setText("ASSET STATUS: CRITICAL")
-            self._verdict_headline.setStyleSheet(
-                f"color: #d86868; font-size: {fs1}px; font-weight: bold;")
-            self._verdict_subtext.setText("Стукач блокирует publish")
-            self._verdict_widget.setStyleSheet("")
+            headline, hcolor = "ASSET STATUS: CRITICAL", "#d86868"
+            subtext = "Publish blocked — fix blockers first"
         elif status == "WARNING":
-            self._verdict_headline.setText("ASSET STATUS: WARNING")
-            self._verdict_headline.setStyleSheet(
-                f"color: #b0a060; font-size: {fs1}px; font-weight: bold;")
-            self._verdict_subtext.setText("Стукач советует еще поработать")
-            self._verdict_widget.setStyleSheet("")
-        elif status == "READY":
-            self._verdict_headline.setText("ASSET STATUS: PIPELINE READY")
-            self._verdict_headline.setStyleSheet(
-                f"color: #477a3c; font-size: {fs1}px; font-weight: bold;")
-            self._verdict_subtext.setText("Стукач считает ассет production-ready")
-            self._verdict_widget.setStyleSheet("")
+            headline, hcolor = "ASSET STATUS: WARNING", _C_YELLOW
+            subtext = "Needs more work before delivery"
         else:
-            self._verdict_headline.setText("No active checks.")
+            headline, hcolor = "ASSET STATUS: PIPELINE READY", _C_GREEN
+            subtext = "Asset is production-ready"
+        if not coord:
+            self._verdict_headline.setText(headline)
             self._verdict_headline.setStyleSheet(
-                f"color: #909090; font-size: {fs1}px; font-weight: bold;")
-            self._verdict_subtext.setText("")
-            self._verdict_widget.setStyleSheet("")
+                f"color: {hcolor}; font-size: {fs1}px; font-weight: bold;")
+            self._verdict_subtext.setText(subtext)
+        else:
+            gate = {
+                "CRITICAL": ("BLOCKED", "#d86868",
+                             "Blockers must be resolved before publish"),
+                "WARNING": ("REVIEW", _C_YELLOW,
+                            "Warnings require artist decision"),
+                "READY": ("READY", _C_GREEN, "Asset is production-ready"),
+            }.get(status)
+            if gate:
+                self._gate_headline.setText(gate[0])
+                self._gate_headline.setStyleSheet(
+                    f"color: {gate[1]}; font-size: {fs1}px; font-weight: bold;")
+                self._gate_subtext.setText(gate[2])
 
 
 # ── launch / close ────────────────────────────────────────────────────────────
@@ -1518,6 +1810,7 @@ def launch() -> StukachPanel:
 
     _panel_instance.show()
     _panel_instance.raise_()
+    _manager.alog("panel launched (v%s)" % _VERSION)
     return _panel_instance
 
 
