@@ -95,6 +95,7 @@ class MayaCheckObject:
         self._topo_key: tuple = None      # (n_verts, n_edges, n_faces)
         self._transform_key: tuple = None  # world matrix hash
         self.snapshot = None              # lazily built MeshSnapshot
+        self._snapshot_failed = False     # latch: don't retry until topo changes
 
     def _is_topo_dirty(self) -> bool:
         """Check if mesh topology has changed since last run."""
@@ -108,7 +109,8 @@ class MayaCheckObject:
             return True
         if key != self._topo_key:
             self._topo_key = key
-            self.snapshot = None   # stale — rebuild on next snapshot check
+            self.snapshot = None       # stale — rebuild on next snapshot check
+            self._snapshot_failed = False
             return True
         return False
 
@@ -163,11 +165,21 @@ class MayaCheckObject:
                     continue
             try:
                 if isinstance(checker, _core.SnapshotCheck):
-                    if self.snapshot is None:
-                        self.snapshot = build_snapshot(
-                            self.dag_path, self.transform,
-                            **MayaCheck._wanted_flags)
-                    checker.run(self.dag_path, ctx=self._check_ctx())
+                    if self.snapshot is None and not self._snapshot_failed:
+                        try:
+                            self.snapshot = build_snapshot(
+                                self.dag_path, self.transform,
+                                **MayaCheck._wanted_flags)
+                        except Exception:
+                            self._snapshot_failed = True   # latch until topo change
+                            import traceback
+                            alog("snapshot build FAILED on %s:" % self.transform)
+                            for ln in traceback.format_exc().splitlines()[-3:]:
+                                alog("  " + ln)
+                    if self.snapshot is not None:
+                        checker.run(self.dag_path, ctx=self._check_ctx())
+                    else:
+                        checker.reset()
                 else:
                     checker.run(self.dag_path)
                 checker._ran = True
@@ -1104,9 +1116,12 @@ th{{background:#2a2a2a}}.meta{{margin-bottom:20px}}.status{{font-weight:bold;fon
     @classmethod
     def live_tick(cls) -> None:
         """One live pass: pick up new/removed objects, revalidate dirty ones.
-        Cheap — run_enabled() skips checkers whose data hasn't changed."""
+        Cheap — run_enabled() skips checkers whose data hasn't changed.
+        Does NOT flood the validation queue: skipped while one is draining."""
         if not cls._running or not cls.live:
             return
+        if cls._val_queue:
+            return   # previous pass still draining — dirty detection will skip
         cls.refresh_objects()
         cls.run_all()
 
