@@ -130,7 +130,13 @@ def _ensure_locator(transform: str) -> Optional[str]:
     shape = shape[0]
 
     try:
-        loc = cmds.createNode("stukachLocator", name=loc_name)
+        # skipSelect: createNode hijacks the viewport selection otherwise —
+        # in Live mode the first click on an object created its locator,
+        # Maya switched the selection to the locator and the user's
+        # selection "dropped a second later" (second click found the
+        # locator already existing and was stable)
+        loc = cmds.createNode("stukachLocator", name=loc_name,
+                              skipSelect=True)
         cmds.connectAttr("%s.worldMesh[0]" % shape, "%s.inputMesh" % loc)
         return loc
     except Exception as e:
