@@ -2001,6 +2001,7 @@ class UnusedData(BaseCheck):
         transform = transform[0]
 
         issues = []
+        fix_targets = []
 
         # 1. Empty vertex groups (skinCluster joints with zero weight)
         skins = cmds.listConnections(shape, type="skinCluster") or []
@@ -2013,6 +2014,7 @@ class UnusedData(BaseCheck):
                                            transform=inf, query=True)
                     if all(w < 1e-6 for w in wts):
                         issues.append(f"empty vgroup: {inf}")
+                        fix_targets.append("vgroup:%s|%s" % (skin, inf))
                 except Exception:
                     pass
 
@@ -2029,9 +2031,10 @@ class UnusedData(BaseCheck):
             if attr.startswith("stukach_"):
                 continue
             issues.append(f"custom attr: {attr}")
+            fix_targets.append("attr:%s.%s" % (transform, attr))
 
         self._count = len(issues)
-        self._bad_components = []
+        self._bad_components = fix_targets
         if issues:
             self.metric_text = "; ".join(issues[:5])
             if len(issues) > 5:

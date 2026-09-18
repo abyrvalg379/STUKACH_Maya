@@ -109,7 +109,7 @@ _C_RED      = "#ad4133"
 
 # Checks with an auto-fix operator (category Fix button + per-row Fix)
 _FIXABLE = frozenset({"non_applied_transform", "scale", "construction_history",
-                      "non_manifold", "mat_suffix"})
+                      "non_manifold", "mat_suffix", "unused_data"})
 
 _CHECK_SWATCH = {
     "triangles": "#B2B205", "ngons": "#B20505", "non_manifold": "#05FF05",
@@ -1011,6 +1011,14 @@ class StukachPanel(QtWidgets.QWidget):
         self._isolate_badge.setVisible(False)
         root.addWidget(self._isolate_badge)
 
+        # checkpoint restored hint (hidden until a checkpoint is loaded)
+        self._hint_label = QtWidgets.QLabel("")
+        self._hint_label.setStyleSheet(
+            "color: #b0a060; font-size: %dpx; font-style: italic;"
+            % max(1, _FONT_PX - 1))
+        self._hint_label.setVisible(False)
+        root.addWidget(self._hint_label)
+
         # ── score block ──
         self._score_widget = QtWidgets.QWidget()
         score_layout = QtWidgets.QVBoxLayout(self._score_widget)
@@ -1360,12 +1368,39 @@ class StukachPanel(QtWidgets.QWidget):
         lbl2.setStyleSheet("color: #a0a0a0;")
         lbl2.setFixedWidth(lbl_w)
         row2.addWidget(lbl2)
-        b_fbx = QtWidgets.QPushButton("FBX")
-        b_fbx.setFixedHeight(_px(22))
-        b_fbx.setToolTip("Pre-flight gate, then FBX export")
-        b_fbx.clicked.connect(self._on_publish)
-        row2.addWidget(b_fbx, stretch=1)
+        for fmt in ("FBX", "USD"):
+            b = QtWidgets.QPushButton(fmt)
+            b.setFixedHeight(_px(22))
+            b.setToolTip("Pre-flight gate, then %s export" % fmt)
+            b.clicked.connect(lambda _=False, f=fmt.lower(): self._on_publish(f))
+            row2.addWidget(b, stretch=1)
         exp_layout.addLayout(row2)
+
+        row3 = QtWidgets.QHBoxLayout()
+        row3.setSpacing(_px(3))
+        lbl3 = QtWidgets.QLabel("Checkpoint:")
+        lbl3.setStyleSheet("color: #a0a0a0;")
+        lbl3.setFixedWidth(lbl_w)
+        row3.addWidget(lbl3)
+        b_save = QtWidgets.QPushButton("Save")
+        b_save.setFixedHeight(_px(22))
+        b_save.setToolTip(
+            "Store the current validation snapshot in the scene file")
+        b_save.clicked.connect(self._on_checkpoint_save)
+        row3.addWidget(b_save, stretch=1)
+        b_load = QtWidgets.QPushButton("Load")
+        b_load.setFixedHeight(_px(22))
+        b_load.setToolTip(
+            "Restore the snapshot: checks + stale results (Run revalidates)")
+        b_load.clicked.connect(self._on_checkpoint_load)
+        row3.addWidget(b_load, stretch=1)
+        b_clear = QtWidgets.QPushButton("\u2715")
+        b_clear.setFixedHeight(_px(22))
+        b_clear.setFixedWidth(_px(26))
+        b_clear.setToolTip("Delete the checkpoint from the scene file")
+        b_clear.clicked.connect(self._on_checkpoint_clear)
+        row3.addWidget(b_clear)
+        exp_layout.addLayout(row3)
 
         dbg_row = QtWidgets.QHBoxLayout()
         dbg_row.addStretch()
@@ -1518,7 +1553,7 @@ class StukachPanel(QtWidgets.QWidget):
         else:
             QtWidgets.QMessageBox.warning(self, "Export", "Failed. Check console.")
 
-    def _on_publish(self) -> None:
+    def _on_publish(self, fmt: str = "fbx") -> None:
         mc = _manager.MayaCheck
         check = mc.preflight_export()
         if check == "blocked":
@@ -1531,10 +1566,30 @@ class StukachPanel(QtWidgets.QWidget):
                 QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
             if reply != QtWidgets.QMessageBox.Yes:
                 return
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Publish FBX", "", "FBX (*.fbx)")
+        if fmt == "usd":
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Publish USD", "", "USD (*.usd *.usda *.usdc)")
+        else:
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Publish FBX", "", "FBX (*.fbx)")
         if path:
-            mc.publish_fbx(path)
+            mc.publish(path, fmt)
+
+    def _on_checkpoint_save(self) -> None:
+        if _manager.MayaCheck.save_checkpoint():
+            cmds.inViewMessage(amg="STUKACH: checkpoint saved to scene",
+                               pos="topCenter", fade=True)
+        self.refresh()
+
+    def _on_checkpoint_load(self) -> None:
+        if not _manager.MayaCheck.load_checkpoint():
+            QtWidgets.QMessageBox.information(
+                self, "Checkpoint", "No checkpoint in this scene file.")
+        self.refresh()
+
+    def _on_checkpoint_clear(self) -> None:
+        _manager.MayaCheck.clear_checkpoint()
+        self.refresh()
 
     # ── refresh ───────────────────────────────────────────────────────────────
 
@@ -1591,6 +1646,12 @@ class StukachPanel(QtWidgets.QWidget):
             selected_btn.setChecked(not scene_checked)
             scene_btn.blockSignals(False)
             selected_btn.blockSignals(False)
+
+        # checkpoint hint
+        restored = mc._checkpoint_restored
+        self._hint_label.setText(
+            "Checkpoint restored - press RUN to revalidate" if restored else "")
+        self._hint_label.setVisible(restored)
 
         # live button state
         self._mode_live_btn.blockSignals(True)
@@ -1839,13 +1900,13 @@ def launch() -> StukachPanel:
     try:
         screen = QtWidgets.QApplication.primaryScreen().availableGeometry()
         w = max(dpi_scale(360), _panel_instance.sizeHint().width())
-        h = min(screen.height(), max(dpi_scale(760), _px(900)))
+        h = min(screen.height(), max(dpi_scale(820), _px(980)))
         x = screen.right() - w + 1
         y = screen.top()
         _panel_instance.resize(w, h)
         _panel_instance.move(x, y)
     except Exception:
-        _panel_instance.resize(dpi_scale(360), dpi_scale(760))
+        _panel_instance.resize(dpi_scale(360), dpi_scale(820))
 
     _panel_instance.show()
     _panel_instance.raise_()
