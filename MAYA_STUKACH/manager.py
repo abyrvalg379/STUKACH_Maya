@@ -1204,23 +1204,42 @@ th{{background:#2a2a2a}}.meta{{margin-bottom:20px}}.status{{font-weight:bold;fon
 
     # ── scriptJob callbacks ───────────────────────────────────────────────────
 
-    _generation: int = 0   # bumped on every register — stale callbacks self-destruct
+    _gen_token: str = ""   # unique per module load — stale callbacks self-destruct
+
+    @classmethod
+    def _sweep_foreign_jobs(cls) -> None:
+        """Kill EVERY scriptJob belonging to any MayaCheck generation.
+
+        Hot-reload purges the module but leaves its scriptJobs alive; old
+        generations (pre-guard code) cannot self-destruct and keep firing
+        against stale state — several managers fighting over the same
+        viewport reads as flicker. Descriptions are unique to us."""
+        for desc in (cmds.scriptJob(listJobs=True) or []):
+            if "MayaCheck" in desc:
+                try:
+                    jid = int(desc.split(":", 1)[0])
+                    cmds.scriptJob(kill=jid, force=True)
+                except Exception:
+                    pass
 
     @classmethod
     def _register_jobs(cls) -> None:
-        """Register scriptJobs. Every callback carries the manager generation:
-        after a hot-reload (module purge) the OLD module's jobs keep firing
-        against stale state and fight the new manager (viewport flicker,
-        locator create/delete wars) — so a stale callback kills its own job
-        the first time it fires."""
+        """Register scriptJobs. Every callback carries the manager generation
+        token: after a hot-reload (module purge) the OLD module's jobs keep
+        firing against stale state and fight the new manager (viewport
+        flicker, locator create/delete wars) — so a stale callback kills its
+        own job the first time it fires. Older generations without the guard
+        are swept by description."""
+        cls._sweep_foreign_jobs()
         cls._remove_jobs()
-        cls._generation += 1
-        gen = cls._generation
+        import uuid
+        cls._gen_token = uuid.uuid4().hex
+        gen = cls._gen_token
 
         def _stale_guard(cell):
             import sys
             mod = sys.modules.get(__name__)
-            current = getattr(getattr(mod, "MayaCheck", None), "_generation", None)
+            current = getattr(getattr(mod, "MayaCheck", None), "_gen_token", None)
             if current != gen:
                 try:
                     cmds.scriptJob(kill=cell[0], force=True)
