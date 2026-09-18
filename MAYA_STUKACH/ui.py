@@ -423,6 +423,9 @@ class _CategoryBox(QtWidgets.QFrame):
             grid.addWidget(self._build_naming_fields(self._content), 0, 0, 1, 2)
             grid.addWidget(self._build_check_naming_btn(self._content), 1, 0, 1, 2)
             self._naming_base = 2
+        elif category == "UV":
+            grid.addWidget(self._build_uv_names_block(self._content), 0, 0, 1, 2)
+            self._naming_base = 1
         base_row = self._naming_base
         for i, key in enumerate(keys):
             row = _CheckGridRow(key, self._content)
@@ -474,6 +477,104 @@ class _CategoryBox(QtWidgets.QFrame):
             self._naming_edits[get_s] = e_s
         return w
 
+    def _build_uv_names_block(self, parent) -> QtWidgets.QWidget:
+        """UV set naming: summary + canonical rename (Blender UV Map Names)."""
+        w = QtWidgets.QWidget(parent)
+        lay = QtWidgets.QHBoxLayout(w)
+        lay.setContentsMargins(_px(2), _px(2), _px(2), _px(2))
+        lay.setSpacing(_px(3))
+        self._uv_names_summary = QtWidgets.QLabel("UV Sets:")
+        self._uv_names_summary.setStyleSheet(
+            "color: #909090; font-size: %dpx;" % max(1, _FONT_PX - 1))
+        lay.addWidget(self._uv_names_summary, stretch=1)
+        self._uv_rename_target = QtWidgets.QComboBox()
+        self._uv_rename_target.setEditable(True)
+        self._uv_rename_target.setFixedHeight(_px(20))
+        self._uv_rename_target.addItems(["map1", "uv", "UVMap"])
+        self._uv_rename_target.setMinimumWidth(_px(60))
+        self._uv_rename_target.setToolTip(
+            "Canonical UV set name (map1 = Maya, uv = Houdini, UVMap = Blender)")
+        lay.addWidget(self._uv_rename_target)
+        self._uv_all_scene = QtWidgets.QCheckBox("All Scene")
+        self._uv_all_scene.setToolTip(
+            "Rename on ALL scene meshes, not only validated ones")
+        lay.addWidget(self._uv_all_scene)
+        btn = QtWidgets.QPushButton("Rename")
+        btn.setFixedHeight(_px(20))
+        btn.setToolTip("Rename UV sets to the target name")
+        btn.clicked.connect(self._on_uv_rename)
+        lay.addWidget(btn)
+        return w
+
+    @undo_decorator
+    def _on_uv_rename(self) -> None:
+        mc = _manager.MayaCheck
+        target = self._uv_rename_target.currentText().strip()
+        if not target:
+            return
+        if self._uv_all_scene.isChecked():
+            shapes = cmds.ls(type="mesh", long=True) or []
+            transforms = [sh.rsplit("|", 1)[0] for sh in shapes]
+        else:
+            transforms = list(mc.objects.keys())
+        renamed = deleted = skipped = 0
+        for t in transforms:
+            if not cmds.objExists(t):
+                continue
+            try:
+                shapes = cmds.listRelatives(t, shapes=True, type="mesh",
+                                            fullPath=True) or []
+                if not shapes:
+                    continue
+                shape = shapes[0]
+                sets = cmds.polyUVSet(t, query=True, allUVSets=True) or []
+                if not sets:
+                    continue
+                # keep exactly one canonical set: rename the active one to
+                # the target, delete the extras (target may already exist)
+                active = (cmds.polyUVSet(t, query=True, currentUVSet=True)
+                          or [sets[0]])[0]
+                for old in sets:
+                    if old == target:
+                        continue
+                    try:
+                        cmds.polyUVSet(shape, delete=True, uvSet=old)
+                        deleted += 1
+                    except Exception:
+                        skipped += 1
+                if target not in sets and active != target:
+                    try:
+                        cmds.polyUVSet(shape, rename=True, newUVSet=target,
+                                       uvSet=active)
+                        renamed += 1
+                    except Exception:
+                        skipped += 1
+            except Exception:
+                skipped += 1
+        _manager.alog("uv rename -> '%s': %d renamed, %d deleted, %d skipped"
+                      % (target, renamed, deleted, skipped))
+        cmds.inViewMessage(
+            amg="STUKACH: UV sets -> '%s' (%d renamed, %d extra deleted)"
+                % (target, renamed, deleted), pos="topCenter", fade=True)
+        mc.run_all()
+
+    def _refresh_uv_names_summary(self) -> None:
+        mc = _manager.MayaCheck
+        from collections import Counter
+        names = Counter()
+        for t in mc.objects:
+            try:
+                for us in (cmds.polyUVSet(t, query=True, allUVSets=True) or []):
+                    names[us] += 1
+            except Exception:
+                pass
+        if not names:
+            self._uv_names_summary.setText("UV Sets: -")
+            return
+        self._uv_names_summary.setText(
+            "UV Sets: " + " · ".join("%s x%d" % (n, c)
+                                     for n, c in names.most_common(4)))
+
     def _build_check_naming_btn(self, parent) -> QtWidgets.QWidget:
         b = QtWidgets.QPushButton("Check Naming")
         b.setObjectName("catBoxChild")
@@ -511,6 +612,13 @@ class _CategoryBox(QtWidgets.QFrame):
         self._cat_toggle.blockSignals(True)
         self._cat_toggle.setChecked(any_on)
         self._cat_toggle.blockSignals(False)
+
+        # UV set names summary
+        if self._category == "UV":
+            try:
+                self._refresh_uv_names_summary()
+            except Exception:
+                pass
 
         # Inline naming fields — sync from NamingPolicy
         if self._category == "NAMING":
@@ -932,6 +1040,7 @@ class StukachPanel(QtWidgets.QWidget):
         self.setObjectName(WINDOW_NAME)
         self.setWindowTitle("STUKACH")
         self.setMinimumWidth(dpi_scale(360))
+        self.setMinimumHeight(dpi_scale(640))
         self.setStyleSheet(_QSS)
 
         self._obj_rows: Dict[str, _ObjectRow] = {}
@@ -1147,6 +1256,8 @@ class StukachPanel(QtWidgets.QWidget):
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setMinimumHeight(dpi_scale(200))   # never collapse: object
+        # details live here; a squeezed scroll made "nothing drop out"
         container = QtWidgets.QWidget()
         cont_layout = QtWidgets.QVBoxLayout(container)
         cont_layout.setContentsMargins(0, 0, 0, 0)
