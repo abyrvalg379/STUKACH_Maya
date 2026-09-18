@@ -159,17 +159,20 @@ def _serialize_ids(components: List[str], id_type: str) -> str:
 
 def _vp2_update(objects: Dict[str, object], active_check: Optional[str] = None) -> None:
     """Update stukachLocator nodes with bad component data for VP2 drawing."""
-    # Clean up locators for objects no longer tracked
-    tracked = set(objects.keys())
-    for loc in (cmds.ls("stukach_loc_*", type="stukachLocator") or []):
-        # Find which transform this locator is for
-        connected = cmds.listConnections(loc + ".inputMesh", source=True, destination=False) or []
-        if connected:
-            parent = cmds.listRelatives(connected[0], parent=True, fullPath=True) or []
-            if parent and parent[0] not in tracked:
+    # Clean up locators for objects no longer tracked. Name-based: locator
+    # names are derived from the transform ("stukach_loc_<name>"), which is
+    # deterministic — the old connection/listRelatives check silently
+    # returned None on short names and left orphan locators alive.
+    tracked_names = {
+        _LOCATOR_PREFIX + t.split("|")[-1].replace(":", "_")
+        for t in objects.keys()
+    }
+    for loc in (cmds.ls(_LOCATOR_PREFIX + "*", type="stukachLocator") or []):
+        if loc.split("|")[-1] not in tracked_names:
+            try:
                 cmds.delete(loc)
-        else:
-            cmds.delete(loc)
+            except Exception:
+                pass
 
     for transform, mco in objects.items():
         if not cmds.objExists(transform):
