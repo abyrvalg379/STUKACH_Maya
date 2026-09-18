@@ -3,7 +3,7 @@
 STUKACH for Maya — Qt panel, pixel-faithful replica of the Blender add-on UI.
 
 Layout (top to bottom, mirrors Blender's ASSET_CHECKER_PT_Panel v1.6.x):
-  STUKACH v1.1.0 / Pipeline Snitch System
+  STUKACH v1.1.1 / Pipeline Snitch System
   [ RUN STUKACH ]
   [ Coordinator Mode | Live ]
   score block: status line + health-strip + [Next Issue][Copy Summary]
