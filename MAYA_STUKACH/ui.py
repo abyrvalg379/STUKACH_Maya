@@ -2103,8 +2103,10 @@ def _dock_builder(wc_name: str) -> None:
         # the floating window's extra right-margin reserve is not needed
         # inside a dock column: asymmetric margins made the content wider
         # than the column and clipped both edges
-        # native Maya windows inset their content from the frame — match that
-        panel.layout().setContentsMargins(_px(14), _px(8), _px(14), _px(8))
+        # native Maya windows inset their content from the frame — match that.
+        # ABSOLUTE pixels: _px() shrinks with the small Maya font and the
+        # insets become invisible
+        panel.layout().setContentsMargins(14, 8, 14, 8)
         layout.addWidget(panel)
         _panel_instance = panel
     except Exception as e:
