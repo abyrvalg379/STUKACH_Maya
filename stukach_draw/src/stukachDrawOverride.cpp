@@ -14,6 +14,7 @@
 #include <maya/MString.h>
 #include <maya/MEventMessage.h>
 #include <maya/MCallbackIdArray.h>
+#include <maya/MObjectHandle.h>
 #include <maya/MViewport2Renderer.h>
 #include <maya/MUIDrawManager.h>
 #include <maya/MPointArray.h>
@@ -43,11 +44,31 @@ StukachDrawOverride::StukachDrawOverride(const MObject& obj)
         [](void* clientData) {
             MObject* node = static_cast<MObject*>(clientData);
             if (node) {
-                MRenderer::setGeometryDrawDirty(*node);
+                // Guard: the event can fire while the owning override is
+                // already destroyed (dangling clientData) or the node is
+                // being deleted by scene teardown (File > New) — calling
+                // setGeometryDrawDirty with a dead MObject crashed Maya
+                // (ACCESS_VIOLATION in TdrawDbSync::geometryChanged).
+                MObjectHandle handle(*node);
+                if (handle.isAlive() && !node->isNull()) {
+                    MRenderer::setGeometryDrawDirty(*node);
+                }
             }
         },
         &fNode
     );
+}
+
+// ── Destructor ──────────────────────────────────────────────────────────────
+
+StukachDrawOverride::~StukachDrawOverride()
+{
+    // The callback receives &fNode (a member of THIS instance). Without
+    // removal it fires with a dangling pointer after the override dies.
+    if (fModelEditorChangedCb) {
+        MEventMessage::removeCallback(fModelEditorChangedCb);
+        fModelEditorChangedCb = 0;
+    }
 }
 
 // ── Supported draw APIs ─────────────────────────────────────────────────────
