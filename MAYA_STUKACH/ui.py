@@ -499,6 +499,15 @@ class _CategoryBox(QtWidgets.QFrame):
         self._uv_rename_target.setMinimumWidth(_px(70))
         self._uv_rename_target.setToolTip(
             "Pick or type the canonical UV set name")
+        # explicit style: a menu-bearing button can fall back to the native
+        # (white) style on scaled monitors where the global QSS misses it
+        self._uv_rename_target.setStyleSheet(
+            "QPushButton { background: #303030; color: #e6e6e6;"
+            " border: 1px solid #3a3a3a; border-radius: 3px;"
+            " padding: %dpx %dpx; font-size: %dpx; }"
+            "QPushButton:hover { background: #3d3d3d; }"
+            "QPushButton::menu-indicator { subcontrol-position: right center;"
+            " right: 4px; }" % (_px(2), _px(6), _FONT_PX))
         menu = QtWidgets.QMenu(self._uv_rename_target)
         for name in ("map1", "uv", "UVMap"):
             menu.addAction(name, lambda n=name:
@@ -1310,6 +1319,12 @@ class StukachPanel(QtWidgets.QWidget):
         self._preset_combo.setSizeAdjustPolicy(
             QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self._preset_combo.setMinimumContentsLength(3)
+        self._preset_combo.setStyleSheet(
+            "QComboBox { background: #303030; color: #e6e6e6;"
+            " border: 1px solid #3a3a3a; border-radius: 3px;"
+            " padding: %dpx %dpx; font-size: %dpx; }"
+            "QComboBox::drop-down { border: none; width: %dpx; }"
+            % (_px(2), _px(6), max(1, _FONT_PX - 1), _px(16)))
         self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
         presets_row.addWidget(self._preset_combo, stretch=1)
         self._preset_save_btn = QtWidgets.QPushButton("+")
