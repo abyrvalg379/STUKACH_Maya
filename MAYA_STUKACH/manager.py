@@ -1204,14 +1204,49 @@ th{{background:#2a2a2a}}.meta{{margin-bottom:20px}}.status{{font-weight:bold;fon
 
     # ── scriptJob callbacks ───────────────────────────────────────────────────
 
+    _generation: int = 0   # bumped on every register — stale callbacks self-destruct
+
     @classmethod
     def _register_jobs(cls) -> None:
+        """Register scriptJobs. Every callback carries the manager generation:
+        after a hot-reload (module purge) the OLD module's jobs keep firing
+        against stale state and fight the new manager (viewport flicker,
+        locator create/delete wars) — so a stale callback kills its own job
+        the first time it fires."""
         cls._remove_jobs()
-        cls._job_ids = [
-            cmds.scriptJob(event=["SelectionChanged", cls._on_selection_changed]),
-            cmds.scriptJob(event=["SceneOpened",      cls._on_scene_changed]),
-            cmds.scriptJob(event=["NewSceneOpened",   cls._on_scene_changed]),
-        ]
+        cls._generation += 1
+        gen = cls._generation
+
+        def _stale_guard(cell):
+            import sys
+            mod = sys.modules.get(__name__)
+            current = getattr(getattr(mod, "MayaCheck", None), "_generation", None)
+            if current != gen:
+                try:
+                    cmds.scriptJob(kill=cell[0], force=True)
+                except Exception:
+                    pass
+                return True
+            return False
+
+        def _sel_cb(cell=[0]):
+            if _stale_guard(cell):
+                return
+            cls._on_selection_changed()
+
+        def _scene_cb(cell=[0]):
+            if _stale_guard(cell):
+                return
+            cls._on_scene_changed()
+
+        cell_sel, cell_open, cell_new = [0], [0], [0]
+        j1 = cmds.scriptJob(event=["SelectionChanged", _sel_cb])
+        cell_sel[0] = j1
+        j2 = cmds.scriptJob(event=["SceneOpened", _scene_cb])
+        cell_open[0] = j2
+        j3 = cmds.scriptJob(event=["NewSceneOpened", _scene_cb])
+        cell_new[0] = j3
+        cls._job_ids = [j1, j2, j3]
 
     @classmethod
     def _remove_jobs(cls) -> None:
