@@ -66,6 +66,8 @@ private:
         MPointArray& outPoints
     );
 
+    ~StukachDrawOverride() override;   // MUST remove the event callback
+
     MObject fNode;
     MCallbackId fModelEditorChangedCb;
 };
