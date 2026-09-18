@@ -508,13 +508,9 @@ class _CategoryBox(QtWidgets.QFrame):
             "QPushButton:hover { background: #3d3d3d; }"
             "QPushButton::menu-indicator { subcontrol-position: right center;"
             " right: 4px; }" % (_px(2), _px(6), _FONT_PX))
-        menu = QtWidgets.QMenu(self._uv_rename_target)
-        for name in ("map1", "uv", "UVMap"):
-            menu.addAction(name, lambda n=name:
-                           self._uv_rename_target.setText(n))
-        menu.addSeparator()
-        menu.addAction("Custom...", self._on_uv_custom_name)
-        self._uv_rename_target.setMenu(menu)
+        # no setMenu(): a menu-bearing QPushButton can fall back to the
+        # native white style on some setups — we open the menu manually
+        self._uv_rename_target.clicked.connect(self._on_uv_target_menu)
         self._uv_rename_target.setToolTip(
             "Canonical UV set name (map1 = Maya, uv = Houdini, UVMap = Blender)")
         lay.addWidget(self._uv_rename_target)
@@ -528,6 +524,16 @@ class _CategoryBox(QtWidgets.QFrame):
         btn.clicked.connect(self._on_uv_rename)
         lay.addWidget(btn)
         return w
+
+    def _on_uv_target_menu(self) -> None:
+        menu = QtWidgets.QMenu(self._uv_rename_target)
+        for name in ("map1", "uv", "UVMap"):
+            menu.addAction(name, lambda n=name:
+                           self._uv_rename_target.setText(n))
+        menu.addSeparator()
+        menu.addAction("Custom...", self._on_uv_custom_name)
+        menu.exec_(self._uv_rename_target.mapToGlobal(
+            self._uv_rename_target.rect().bottomLeft()))
 
     def _on_uv_custom_name(self) -> None:
         name, ok = QtWidgets.QInputDialog.getText(
