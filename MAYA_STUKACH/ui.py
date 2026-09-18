@@ -191,6 +191,7 @@ def _build_qss() -> str:
         "QLineEdit { background: #252525; color: #e6e6e6; border: 1px solid #3a3a3a; border-radius: 3px; padding: %dpx %dpx; font-size: %dpx; selection-background-color: #4772b3; }"
         "QComboBox { background: #303030; color: #e6e6e6; border: 1px solid #3a3a3a; padding: 3px 8px; font-size: %dpx; border-radius: 3px; }"
         "QComboBox::drop-down { border: none; width: %dpx; }"
+        "QComboBox QLineEdit { background: #252525; color: #e6e6e6; border: none; }"
         "QComboBox QAbstractItemView { background: #252525; color: #e6e6e6; selection-background-color: #3d5d8a; border: 1px solid #3a3a3a; outline: none; }"
         "QScrollArea { border: none; background: transparent; }"
         "QScrollBar:vertical { background: #1d1d1d; width: %dpx; border: none; }"
@@ -489,9 +490,11 @@ class _CategoryBox(QtWidgets.QFrame):
         lay.addWidget(self._uv_names_summary, stretch=1)
         self._uv_rename_target = QtWidgets.QComboBox()
         self._uv_rename_target.setEditable(True)
-        self._uv_rename_target.setFixedHeight(_px(20))
+        self._uv_rename_target.setFixedHeight(_px(22))
         self._uv_rename_target.addItems(["map1", "uv", "UVMap"])
-        self._uv_rename_target.setMinimumWidth(_px(60))
+        self._uv_rename_target.setMinimumWidth(_px(84))
+        self._uv_rename_target.setToolTip(
+            "Pick or type the canonical UV set name")
         self._uv_rename_target.setToolTip(
             "Canonical UV set name (map1 = Maya, uv = Houdini, UVMap = Blender)")
         lay.addWidget(self._uv_rename_target)
@@ -1308,6 +1311,7 @@ class StukachPanel(QtWidgets.QWidget):
         cont_layout.addWidget(self._ignored_box)
         cont_layout.addStretch()
         scroll.setWidget(container)
+        self._scroll = scroll
         root.addWidget(scroll, stretch=1)
 
         # ── asset status box (artist page) ──
@@ -1632,6 +1636,12 @@ class StukachPanel(QtWidgets.QWidget):
         self._objects_open = not self._objects_open
         self._objects_content.setVisible(self._objects_open)
         self._objects_collapse.setText("▾" if self._objects_open else "▸")
+        if self._objects_open:
+            # the section sits at the bottom of the scroll — jump to it,
+            # otherwise the expanded list is invisible below the viewport
+            QtCore.QTimer.singleShot(
+                30, lambda: self._scroll.ensureWidgetVisible(
+                    self._objects_box, 0, _px(20)))
 
     def _on_filter_changed(self, text: str) -> None:
         self._filter_text = text.lower().strip()
