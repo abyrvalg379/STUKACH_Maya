@@ -389,6 +389,7 @@ class MayaCheck:
                 mco.snapshot = None
             if cls._running and not any(
                     cls._enabled_checks.values()):
+                alog("set_checks: no checks left enabled -> clearing STUKACH selection")
                 cls._clear_stukach_selection()
         if run and cls._running:
             cls.run_all()
