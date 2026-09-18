@@ -541,6 +541,9 @@ class NamingPolicy:
     """
     _PREFIX_KEY = "stukach_naming_prefix"
     _SUFFIX_KEY = "stukach_naming_suffix"
+    # groups = namespaces / display layers (Maya equivalent of Blender collections)
+    _COL_PREFIX_KEY = "stukach_col_prefix"
+    _COL_SUFFIX_KEY = "stukach_col_suffix"
 
     @classmethod
     def get_prefix(cls) -> str:
@@ -583,6 +586,62 @@ class NamingPolicy:
                 mel.eval(f'fileInfo -remove "{cls._SUFFIX_KEY}"')
             except Exception:
                 pass
+
+    @classmethod
+    def get_col_prefix(cls) -> str:
+        import maya.cmds as cmds
+        try:
+            val = cmds.fileInfo(cls._COL_PREFIX_KEY, query=True)
+            return val[0] if val else ""
+        except Exception:
+            return ""
+
+    @classmethod
+    def get_col_suffix(cls) -> str:
+        import maya.cmds as cmds
+        try:
+            val = cmds.fileInfo(cls._COL_SUFFIX_KEY, query=True)
+            return val[0] if val else ""
+        except Exception:
+            return ""
+
+    @classmethod
+    def set_col_prefix(cls, prefix: str) -> None:
+        import maya.cmds as cmds
+        if prefix:
+            cmds.fileInfo(cls._COL_PREFIX_KEY, prefix)
+        else:
+            try:
+                import maya.mel as mel
+                mel.eval(f'fileInfo -remove "{cls._COL_PREFIX_KEY}"')
+            except Exception:
+                pass
+
+    @classmethod
+    def set_col_suffix(cls, suffix: str) -> None:
+        import maya.cmds as cmds
+        if suffix:
+            cmds.fileInfo(cls._COL_SUFFIX_KEY, suffix)
+        else:
+            try:
+                import maya.mel as mel
+                mel.eval(f'fileInfo -remove "{cls._COL_SUFFIX_KEY}"')
+            except Exception:
+                pass
+
+    @classmethod
+    def validate_group(cls, name: str) -> list:
+        """Issues for a namespace/layer name (lowercase + prefix/suffix policy)."""
+        issues = []
+        if not _DEFAULT_NAMESPACE_PATTERN.match(name):
+            issues.append("not lowercase_snake_case")
+        prefix = cls.get_col_prefix()
+        if prefix and not name.startswith(prefix):
+            issues.append(f"missing prefix '{prefix}'")
+        suffix = cls.get_col_suffix()
+        if suffix and not name.endswith(suffix):
+            issues.append(f"missing suffix '{suffix}'")
+        return issues
 
     @classmethod
     def validate(cls, name: str) -> list:
@@ -1903,20 +1962,21 @@ class ColNaming(BaseCheck):
 
         issues = []
 
-        # Check namespace
+        # Check namespace against the group naming policy
         short = transform.split("|")[-1]
         if ":" in short:
             ns = short.rsplit(":", 1)[0]
-            if not _DEFAULT_NAMESPACE_PATTERN.match(ns):
-                issues.append(f"namespace '{ns}' — not lowercase_snake_case")
+            ns_issues = NamingPolicy.validate_group(ns)
+            for msg in ns_issues:
+                issues.append(f"namespace '{ns}' — {msg}")
 
         # Check display layers the object belongs to
         layers = cmds.listConnections(transform, type="displayLayer") or []
         for layer in set(layers):
             if layer == "defaultLayer":
                 continue
-            if not _DEFAULT_NAMESPACE_PATTERN.match(layer):
-                issues.append(f"layer '{layer}' — not lowercase_snake_case")
+            for msg in NamingPolicy.validate_group(layer):
+                issues.append(f"layer '{layer}' — {msg}")
 
         self._count = len(issues)
         self._bad_components = []
