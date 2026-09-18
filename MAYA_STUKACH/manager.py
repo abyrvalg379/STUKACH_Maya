@@ -12,6 +12,10 @@ MayaCheck:
 """
 from __future__ import annotations
 
+import getpass
+import os
+import time
+from collections import deque
 from typing import Dict, List, Optional
 
 import maya.cmds as cmds
@@ -19,6 +23,34 @@ import maya.api.OpenMaya as om
 
 from . import core as _core
 from . import overlay as _overlay
+
+# Single source of truth for the panel header, reports and debug info.
+_VERSION = "1.1.0"
+
+
+# ── session log (Blender parity: alog + ring buffer + %TEMP% file) ───────────
+# ASCII-only messages — Maya print() dies on emoji (UnicodeEncodeError).
+
+_LOG: deque = deque(maxlen=40)
+_LOG_PATH = os.path.join(
+    os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "stukach_maya.log")
+
+
+def alog(msg: str) -> None:
+    """Print + remember the last 40 messages + append to %TEMP%/stukach_maya.log."""
+    line = "%s %s" % (time.strftime("%H:%M:%S"), msg)
+    print("[STUKACH] " + msg)
+    _LOG.append(line)
+    try:
+        if os.path.exists(_LOG_PATH) and os.path.getsize(_LOG_PATH) > 262144:
+            old = _LOG_PATH + ".old"
+            if os.path.exists(old):
+                os.remove(old)
+            os.replace(_LOG_PATH, old)
+        with open(_LOG_PATH, "a", encoding="utf-8", errors="replace") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 # ponytail: _DEFAULT_ENABLED removed — RUN only validates what user explicitly enabled.
 # Use batch buttons (All/None/Blk/Wrn) to quickly set check state.
@@ -131,7 +163,7 @@ class MayaCheckObject:
                 checker._ran = True
             except Exception as e:
                 checker.reset()
-                print(f"[STUKACH] Error in {key} on {self.transform}: {e}")
+                alog(f"Error in {key} on {self.transform}: {e}")
 
     def _is_alive(self) -> bool:
         try:
@@ -185,7 +217,7 @@ def set_ignore_list(transform: str, keys) -> None:
         cmds.setAttr(transform + "." + _IGNORE_ATTR,
                      ",".join(sorted(keys)), type="string")
     except Exception as e:
-        print(f"[STUKACH] set_ignore_list failed on {transform}: {e}")
+        alog(f"set_ignore_list failed on {transform}: {e}")
 
 
 def _all_mesh_transforms() -> List[str]:
@@ -206,6 +238,8 @@ class MayaCheck:
     scope: str = _SCOPE_SCENE                   # SCENE | SELECTED
     active_check: Optional[str] = None          # key of check in overlay focus, or None
     coordinator_mode: bool = False              # True = hide INFO checks, show asset status badge
+    live: bool = False                          # live mode: panel timer calls live_tick()
+    _next_issue_ptr: int = 0                    # cycling index for next_issue()
     _job_ids: List[int] = []
     _running: bool = False
     _ui_callback = None   # callable() -> triggers UI refresh
@@ -509,7 +543,7 @@ class MayaCheck:
         scene_name = cmds.file(query=True, sceneName=True) or "untitled"
         report = {
             "tool": "STUKACH Maya",
-            "version": "1.0.0",
+            "version": _VERSION,
             "scene": scene_name,
             "date": datetime.now().isoformat(timespec="seconds"),
             "scope": cls.scope,
@@ -560,7 +594,7 @@ class MayaCheck:
                 return False
             return True
         except Exception as e:
-            print(f"[STUKACH] export error: {e}")
+            alog(f"export error: {e}")
             return False
 
     @staticmethod
@@ -615,19 +649,19 @@ th{{background:#2a2a2a}}.meta{{margin-bottom:20px}}.status{{font-weight:bold;fon
         """Run preflight, then export FBX. Returns True if exported."""
         check = cls.preflight_export()
         if check == "blocked":
-            print(f"[STUKACH] FBX export BLOCKED — {cls.total_blockers()} blockers found. Fix issues first.")
+            alog(f"FBX export BLOCKED — {cls.total_blockers()} blockers found. Fix issues first.")
             return False
         if check == "warning":
-            print(f"[STUKACH] FBX export WARNING — {cls.total_warnings()} warnings. Proceeding anyway.")
+            alog(f"FBX export WARNING — {cls.total_warnings()} warnings. Proceeding anyway.")
         try:
             if selection_only:
                 cmds.file(path, force=True, type="FBX export", pr=True, es=True)
             else:
                 cmds.file(path, force=True, type="FBX export", pr=True, ea=True)
-            print(f"[STUKACH] FBX exported: {path}")
+            alog(f"FBX exported: {path}")
             return True
         except Exception as e:
-            print(f"[STUKACH] FBX export error: {e}")
+            alog(f"FBX export error: {e}")
             return False
 
     # ── fix operators ────────────────────────────────────────────────────────
@@ -672,7 +706,7 @@ th{{background:#2a2a2a}}.meta{{margin-bottom:20px}}.status{{font-weight:bold;fon
                     continue
                 fixed += 1
             except Exception as e:
-                print(f"[STUKACH] fix {check_key} on {t}: {e}")
+                alog(f"fix {check_key} on {t}: {e}")
         return fixed
 
     @classmethod
@@ -685,6 +719,218 @@ th{{background:#2a2a2a}}.meta{{margin-bottom:20px}}.status{{font-weight:bold;fon
             if cls._enabled_checks.get(key, False):
                 total += cls.fix_issues(key)
         return total
+
+    # ── score data / navigation / clipboard (Blender parity) ──────────────────
+
+    @staticmethod
+    def object_issue_counts(mco: MayaCheckObject) -> "tuple[int, int]":
+        """(blockers, warnings) for one object, ignored checks excluded."""
+        ignored = get_ignore_list(mco.transform)
+        b = w = 0
+        for key, checker in mco.checkers.items():
+            if not mco.enabled.get(key) or key in ignored:
+                continue
+            if not checker or checker.count == 0:
+                continue
+            sev = _core.CHECK_SEVERITIES.get(key)
+            if sev == "BLOCKER":
+                b += checker.count
+            elif sev == "WARNING":
+                w += checker.count
+        return (b, w)
+
+    @classmethod
+    def category_summary(cls) -> Dict[str, "tuple[int, int]"]:
+        """Per-category (blockers, warnings) across all tracked objects."""
+        out = {}
+        for cat, keys in _core.CHECK_CATEGORIES.items():
+            b = w = 0
+            for mco in cls.objects.values():
+                ignored = get_ignore_list(mco.transform)
+                for k in keys:
+                    if not mco.enabled.get(k) or k in ignored:
+                        continue
+                    checker = mco.checkers.get(k)
+                    if not checker or checker.count == 0:
+                        continue
+                    sev = _core.CHECK_SEVERITIES.get(k)
+                    if sev == "BLOCKER":
+                        b += checker.count
+                    elif sev == "WARNING":
+                        w += checker.count
+            out[cat] = (b, w)
+        return out
+
+    @classmethod
+    def problem_objects(cls) -> List[str]:
+        """Tracked transforms with issues, worst-first (blockers, warnings)."""
+        scored = []
+        for t, mco in cls.objects.items():
+            b, w = cls.object_issue_counts(mco)
+            if b or w:
+                scored.append((t, b, w))
+        scored.sort(key=lambda item: (-item[1], -item[2], item[0]))
+        return [t for t, _b, _w in scored]
+
+    @classmethod
+    def next_issue(cls) -> Optional[str]:
+        """Cycle to the next problem object: select + frame it. Returns name."""
+        probs = cls.problem_objects()
+        if not probs:
+            return None
+        cls._next_issue_ptr = (cls._next_issue_ptr + 1) % len(probs)
+        target = probs[cls._next_issue_ptr]
+        try:
+            cmds.select(target, replace=True)
+            cmds.viewFit(target)
+        except Exception as e:
+            alog("next_issue: %s" % e)
+        return target
+
+    # ── validator name (optionVars; empty -> OS login) ───────────────────────
+
+    @classmethod
+    def get_validator_name(cls) -> str:
+        try:
+            name = cmds.optionVar(query="stukachValidatorName") or ""
+        except Exception:
+            name = ""
+        return name or getpass.getuser()
+
+    @classmethod
+    def set_validator_name(cls, name: str) -> None:
+        try:
+            if name:
+                cmds.optionVar(sv=("stukachValidatorName", name))
+            elif cmds.optionVar(exists="stukachValidatorName"):
+                cmds.optionVar(remove="stukachValidatorName")
+        except Exception as e:
+            alog("set_validator_name: %s" % e)
+
+    # ── clipboard report text (mode-aware, Blender parity) ───────────────────
+
+    @classmethod
+    def build_summary_text(cls) -> str:
+        from datetime import datetime
+        maya_ver = cmds.about(query=True, version=True) or "?"
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        sig = ("Validated by: %s | %s | Maya %s | STUKACH Maya v%s"
+               % (cls.get_validator_name(), stamp, maya_ver, _VERSION))
+        if not cls.objects or not cls._running:
+            return "STUKACH Maya v%s — nothing validated yet.\n%s" % (_VERSION, sig)
+
+        b_total, w_total = cls.total_blockers(), cls.total_warnings()
+        lines = []
+        if cls.coordinator_mode:
+            if b_total:
+                verdict = "BLOCKED (%d blockers, %d warnings)" % (b_total, w_total)
+            elif w_total:
+                verdict = "REVIEW (%d warnings)" % w_total
+            else:
+                verdict = "READY (0 blockers, 0 warnings)"
+            lines.append("VALIDATION: %s" % verdict)
+            lines.append("Scene: %s | scope: %s | %d objects"
+                         % (cmds.file(query=True, sceneName=True) or "untitled",
+                            cls.scope, len(cls.objects)))
+            if b_total:
+                lines.append("")
+                lines.append("BLOCKERS (fix first):")
+                lines += cls._summary_check_lines("BLOCKER")
+            if w_total:
+                lines.append("")
+                lines.append("WARNINGS:")
+                lines += cls._summary_check_lines("WARNING")
+        else:
+            lines.append("STUKACH Maya v%s — validation summary" % _VERSION)
+            lines.append("Scene: %s | scope: %s"
+                         % (cmds.file(query=True, sceneName=True) or "untitled",
+                            cls.scope))
+            lines.append("%d objects | %d blockers | %d warnings"
+                         % (len(cls.objects), b_total, w_total))
+            if b_total or w_total:
+                lines.append("")
+                for t in cls.problem_objects()[:10]:
+                    mco = cls.objects[t]
+                    b, w = cls.object_issue_counts(mco)
+                    top = cls._top_check_label(mco)
+                    short = t.split("|")[-1]
+                    lines.append("%s: %dB/%dW (top: %s)" % (short, b, w, top))
+        lines.append("")
+        lines.append(sig)
+        return "\n".join(lines)
+
+    @classmethod
+    def _summary_check_lines(cls, severity: str) -> List[str]:
+        """Aggregated 'check: count' lines for one severity, worst-first."""
+        agg: Dict[str, int] = {}
+        for mco in cls.objects.values():
+            ignored = get_ignore_list(mco.transform)
+            for key, checker in mco.checkers.items():
+                if (not mco.enabled.get(key) or key in ignored
+                        or not checker or checker.count == 0):
+                    continue
+                if _core.CHECK_SEVERITIES.get(key) == severity:
+                    agg[key] = agg.get(key, 0) + checker.count
+        ordered = sorted(agg.items(), key=lambda kv: -kv[1])
+        return ["  %s: %d" % (k, n) for k, n in ordered[:8]]
+
+    @staticmethod
+    def _top_check_label(mco: MayaCheckObject) -> str:
+        """Name of the worst active check on the object (for the compact list)."""
+        best, best_sev = "-", ""
+        for key, checker in mco.checkers.items():
+            if not mco.enabled.get(key) or not checker or checker.count == 0:
+                continue
+            sev = _core.CHECK_SEVERITIES.get(key)
+            if sev == "BLOCKER":
+                best, best_sev = key, "BLOCKER"
+                break
+            if sev == "WARNING" and best_sev != "BLOCKER":
+                best, best_sev = key, sev
+        return best
+
+    # ── debug info (bug reports without crash logs) ──────────────────────────
+
+    @classmethod
+    def get_debug_info(cls) -> str:
+        import platform
+        import sys
+        active = [k for k, en in cls._enabled_checks.items() if en]
+        lines = [
+            "STUKACH Maya debug info",
+            "  STUKACH: %s" % _VERSION,
+            "  Maya: %s" % (cmds.about(query=True, version=True) or "?"),
+            "  OS: %s %s" % (platform.system(), platform.release()),
+            "  Python: %s" % sys.version.split()[0],
+            "  Running: %s | Live: %s | Coordinator: %s"
+            % (cls._running, cls.live, cls.coordinator_mode),
+            "  Scope: %s | Objects: %d | Blockers: %d | Warnings: %d"
+            % (cls.scope, len(cls.objects), cls.total_blockers(),
+               cls.total_warnings()),
+            "  Isolating: %s" % cls.is_isolating(),
+            "  Active checks (%d): %s" % (len(active), ", ".join(active)),
+            "  Scene: %s" % (cmds.file(query=True, sceneName=True) or "untitled"),
+            "  Log: %s" % _LOG_PATH,
+            "  Recent log:",
+        ]
+        lines += ["    " + l for l in list(_LOG)[-40:]]
+        return "\n".join(lines)
+
+    # ── live mode (panel QTimer drives live_tick) ─────────────────────────────
+
+    @classmethod
+    def set_live(cls, enabled: bool) -> None:
+        cls.live = bool(enabled)
+        alog("live mode %s" % ("ON" if cls.live else "OFF"))
+
+    @classmethod
+    def live_tick(cls) -> None:
+        """One live pass: pick up new/removed objects, revalidate dirty ones.
+        Cheap — run_enabled() skips checkers whose data hasn't changed."""
+        if not cls._running or not cls.live:
+            return
+        cls.refresh_objects()
+        cls.run_all()
 
     # ── scriptJob callbacks ───────────────────────────────────────────────────
 
@@ -728,4 +974,4 @@ th{{background:#2a2a2a}}.meta{{margin-bottom:20px}}.status{{font-weight:bold;fon
             try:
                 cls._ui_callback()
             except Exception as e:
-                print(f"[STUKACH] UI callback error: {e}")
+                alog(f"UI callback error: {e}")
