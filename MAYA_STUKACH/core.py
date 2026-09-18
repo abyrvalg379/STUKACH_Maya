@@ -354,19 +354,34 @@ class NonAppliedScale(BaseCheck):
 
 
 class ConstructionHistory(BaseCheck):
-    """Object has construction history (Maya equivalent of modifier stack)."""
+    """Object still carries construction history (must be deleted for publish).
+
+    Binary: 0 = clean, 1 = history present. The metric lists the offending
+    node types so the artist sees WHAT to delete without opening the stack."""
     severity = "WARNING"
+
+    _IGNORED = {"groupId", "tweak", "groupParts", "shadingEngine", "mesh",
+                "transform", "shadingEngine", "objectSet", "dagNode",
+                "dependNode", "shape"}
 
     def run(self, dag_path: om.MDagPath) -> None:
         self.reset()
         node = dag_path.fullPathName()
         history = cmds.listHistory(node, pruneDagObjects=True) or []
-        # Filter out obvious noise (groupId, tweak, etc.)
-        ignored = {'groupId', 'tweak', 'groupParts', 'shadingEngine'}
-        real = [h for h in history if cmds.nodeType(h) not in ignored]
-        self._count = len(real)
-        if real:
-            self.metric_text = f"History: {len(real)} nodes"
+        from collections import Counter
+        types = Counter()
+        for h in history:
+            try:
+                nt = cmds.nodeType(h)
+            except Exception:
+                continue
+            if nt not in self._IGNORED:
+                types[nt] += 1
+        if types:
+            self._count = 1
+            top = ", ".join("%s x%d" % (t, c)
+                            for t, c in types.most_common(5))
+            self.metric_text = "history: " + top
 
 
 class OriginAtZero(BaseCheck):
@@ -1790,51 +1805,8 @@ _MODIFIER_EXCLUDE = frozenset({
 })
 
 
-class ModifierStack(BaseCheck):
-    """Detect unapplied modifiers on the construction history.
-
-    Ported from Blender's ModifierStack checker. Reports non-Armature
-    deformers and modelling operators still in the history stack.
-    """
-    severity = "WARNING"
-
-    def run(self, dag_path: om.MDagPath) -> None:
-        self.reset()
-        sdp = _shape_dag(dag_path)
-        shape = om.MFnMesh(sdp).fullPathName()
-        transform = cmds.listRelatives(shape, parent=True, fullPath=True) or [shape.split(".")[0]]
-        transform = transform[0]
-
-        history = cmds.listHistory(transform) or []
-        modifiers = []
-        for node in history:
-            try:
-                nt = cmds.nodeType(node)
-            except Exception:
-                continue
-            if nt in _MODIFIER_EXCLUDE:
-                continue
-            if nt in _MODIFIER_NODE_TYPES:
-                modifiers.append(node)
-            elif nt not in ("mesh", "transform", "dagNode", "dependNode",
-                            "shape", "skinClusterFilter", "objectSet",
-                            "polyCube", "polySphere", "polyCylinder",
-                            "polyPlane", "polyTorus", "polyCone",
-                            "polyPipe", "polyPrism", "polyPyramid"):
-                # Check if it's a deformer (use node name, not type)
-                try:
-                    if cmds.objectType(node, isAType="deformer"):
-                        modifiers.append(node)
-                except Exception:
-                    pass
-
-        self._count = len(modifiers)
-        self._bad_components = []  # no component-level selection
-        if modifiers:
-            self.metric_text = ", ".join(modifiers[:5])
-            if len(modifiers) > 5:
-                self.metric_text += f" +{len(modifiers)-5}"
-
+# (modifier_stack removed: in Maya the modifier stack IS the construction
+# history — covered by the binary ConstructionHistory check)
 
 # ─── COL/NAMESPACE NAMING (ported from Blender's ColNaming) ───────────────────
 
@@ -2116,11 +2088,28 @@ class UncenteredPivots(SnapshotCheck):
     """Rotate pivot not at world origin."""
     severity = "WARNING"
 
+    _THRESHOLD = 0.05   # fraction of the bbox diagonal
+
     def run_snapshot(self, snap):
         rp = snap.rotate_pivot
-        if any(abs(v) > 1e-6 for v in rp):
+        if not snap.points:
+            return
+        xs = [pt[0] for pt in snap.points]
+        ys = [pt[1] for pt in snap.points]
+        zs = [pt[2] for pt in snap.points]
+        cx = (min(xs) + max(xs)) / 2.0
+        cy = (min(ys) + max(ys)) / 2.0
+        cz = (min(zs) + max(zs)) / 2.0
+        diag = ((max(xs) - min(xs)) ** 2 + (max(ys) - min(ys)) ** 2 +
+                (max(zs) - min(zs)) ** 2) ** 0.5
+        if diag < 1e-9:
+            return
+        dist = ((rp[0] - cx) ** 2 + (rp[1] - cy) ** 2 +
+                (rp[2] - cz) ** 2) ** 0.5
+        if dist > diag * self._THRESHOLD:
             self._count = 1
-            self.metric_text = "pivot (%.3f, %.3f, %.3f)" % rp
+            self.metric_text = "pivot off-center by %.1f%% of bbox" % (
+                dist / diag * 100.0)
 
 
 class ParentGeometry(SnapshotCheck):
@@ -2152,7 +2141,6 @@ CHECK_TYPES: dict = {
     "scale":                NonAppliedScale,
     "construction_history": ConstructionHistory,
     "origin_at_zero":       OriginAtZero,
-    "modifier_stack":       ModifierStack,
     # SYMMETRY
     "symmetry_x":           SymmetryX,
     "symmetry_y":           SymmetryY,
@@ -2198,7 +2186,7 @@ CHECK_CATEGORIES: dict = {
                    "z_fighting",
                    "hard_edges", "lamina", "zero_length_edges", "starlike"),
     "TRANSFORMS": ("non_applied_transform", "scale", "construction_history",
-                   "origin_at_zero", "modifier_stack",
+                   "origin_at_zero",
                    "uncentered_pivots", "parent_geometry"),
     "SYMMETRY":   ("symmetry_x", "symmetry_y", "symmetry_z"),
     "UV":         ("uv_single_set", "uv_udim_ready", "uv_udim_bounds", "uv_material_udim",
