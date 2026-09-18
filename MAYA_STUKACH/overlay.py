@@ -171,8 +171,8 @@ def _vp2_update(objects: Dict[str, object], active_check: Optional[str] = None) 
             continue
 
         loc = _ensure_locator(transform)
-        if not loc:
-            continue
+        if not loc or not cmds.objExists(loc):
+            continue   # locator died with a scene change between passes
 
         # Gather bad components
         all_faces = []
@@ -201,7 +201,9 @@ def _vp2_update(objects: Dict[str, object], active_check: Optional[str] = None) 
                     elif ".vtx[" in comp:
                         all_verts.append(comp)
 
-        # Serialize and set
+        # Serialize and set (locator may be deleted by a scene change mid-pass)
+        if not cmds.objExists(loc):
+            continue
         cmds.setAttr(loc + ".badFaces", _serialize_ids(all_faces, "f"), type="string")
         cmds.setAttr(loc + ".badEdges", _serialize_ids(all_edges, "e"), type="string")
         cmds.setAttr(loc + ".badVerts", _serialize_ids(all_verts, "vtx"), type="string")
@@ -236,9 +238,13 @@ def _vp2_update(objects: Dict[str, object], active_check: Optional[str] = None) 
         else:
             cmds.setAttr(loc + ".drawBBox", False)
 
-        # Trigger VP2 redraw (isAlwaysDirty=false — explicit dirty)
+        # Trigger VP2 redraw (isAlwaysDirty=false — explicit dirty).
+        # Deferred calls fire AFTER the caller returns — possibly after a
+        # scene change deleted the locator: guard against dead names.
         try:
-            cmds.evalDeferred(lambda l=loc: cmds.setAttr(l + ".drawEnabled", True))
+            cmds.evalDeferred(
+                lambda l=loc: cmds.setAttr(l + ".drawEnabled", True)
+                if cmds.objExists(l) else None)
         except Exception:
             pass
 
