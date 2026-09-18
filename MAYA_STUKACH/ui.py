@@ -488,13 +488,20 @@ class _CategoryBox(QtWidgets.QFrame):
         self._uv_names_summary.setStyleSheet(
             "color: #909090; font-size: %dpx;" % max(1, _FONT_PX - 1))
         lay.addWidget(self._uv_names_summary, stretch=1)
-        self._uv_rename_target = QtWidgets.QComboBox()
-        self._uv_rename_target.setEditable(True)
+        # QPushButton + menu: an editable QComboBox rendered dark-on-dark
+        # artifacts at some DPI scales, so a plain button opens a menu
+        self._uv_rename_target = QtWidgets.QPushButton("map1")
         self._uv_rename_target.setFixedHeight(_px(22))
-        self._uv_rename_target.addItems(["map1", "uv", "UVMap"])
         self._uv_rename_target.setMinimumWidth(_px(84))
         self._uv_rename_target.setToolTip(
             "Pick or type the canonical UV set name")
+        menu = QtWidgets.QMenu(self._uv_rename_target)
+        for name in ("map1", "uv", "UVMap"):
+            menu.addAction(name, lambda n=name:
+                           self._uv_rename_target.setText(n))
+        menu.addSeparator()
+        menu.addAction("Custom...", self._on_uv_custom_name)
+        self._uv_rename_target.setMenu(menu)
         self._uv_rename_target.setToolTip(
             "Canonical UV set name (map1 = Maya, uv = Houdini, UVMap = Blender)")
         lay.addWidget(self._uv_rename_target)
@@ -509,10 +516,16 @@ class _CategoryBox(QtWidgets.QFrame):
         lay.addWidget(btn)
         return w
 
+    def _on_uv_custom_name(self) -> None:
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "Custom UV Set Name", "Name:")
+        if ok and name.strip():
+            self._uv_rename_target.setText(name.strip())
+
     @undo_decorator
     def _on_uv_rename(self) -> None:
         mc = _manager.MayaCheck
-        target = self._uv_rename_target.currentText().strip()
+        target = self._uv_rename_target.text().strip()
         if not target:
             return
         if self._uv_all_scene.isChecked():
@@ -1056,6 +1069,7 @@ class StukachPanel(QtWidgets.QWidget):
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
                            QtWidgets.QSizePolicy.Expanding)
         _manager.MayaCheck._ui_callback = self.refresh
+        self._height_anim = None
 
         # Live-mode tick (panel-owned so hot-reload kills it with the panel)
         # one timer drives BOTH progressive validation (150ms) and Live (1s)
@@ -1563,6 +1577,30 @@ class StukachPanel(QtWidgets.QWidget):
         exp_layout.addLayout(dbg_row)
         root.addWidget(export_box)
 
+    # ── smooth height animation (FLOMASTER parity) ────────────────────────────
+
+    def _animate_to_height(self, target_h: int) -> None:
+        """Animate the window height to target (anchored top-right, growing
+        down), like FLOMASTER's AnimateToHeight: 250 ms, OutCubic."""
+        try:
+            screen = QtWidgets.QApplication.primaryScreen().availableGeometry()
+            target_h = int(max(self.minimumHeight(),
+                               min(target_h, screen.bottom() - self.y() - 8)))
+            geom = self.geometry()
+            if abs(geom.height() - target_h) < 2:
+                return
+            anim = QtCore.QPropertyAnimation(self, b"geometry", self)
+            anim.setDuration(250)
+            anim.setStartValue(QtCore.QRect(
+                geom.x(), geom.y(), geom.width(), geom.height()))
+            anim.setEndValue(QtCore.QRect(
+                geom.x(), geom.y(), geom.width(), target_h))
+            anim.setEasingCurve(QtCore.QEasingCurve.OutCubic)
+            self._height_anim = anim   # keep a ref: parent does not own it
+            anim.start(QtCore.QAbstractAnimation.DeleteWhenStopped)
+        except Exception:
+            pass
+
     # ── slots ──
 
     def _on_run(self) -> None:
@@ -1633,15 +1671,24 @@ class StukachPanel(QtWidgets.QWidget):
                            pos="topCenter", fade=True)
 
     def _on_objects_collapse(self) -> None:
-        self._objects_open = not self._objects_open
+        was_open = self._objects_open
+        self._objects_open = not was_open
         self._objects_content.setVisible(self._objects_open)
         self._objects_collapse.setText("▾" if self._objects_open else "▸")
         if self._objects_open:
-            # the section sits at the bottom of the scroll — jump to it,
-            # otherwise the expanded list is invisible below the viewport
-            QtCore.QTimer.singleShot(
-                30, lambda: self._scroll.ensureWidgetVisible(
-                    self._objects_box, 0, _px(20)))
+            QtCore.QTimer.singleShot(30, self._grow_for_objects)
+        else:
+            QtCore.QTimer.singleShot(30, lambda: self._scroll.ensureWidgetVisible(
+                self._objects_box, 0, _px(20)))
+
+    def _grow_for_objects(self) -> None:
+        """Grow the window down so the expanded Objects list is on screen."""
+        self._scroll.ensureWidgetVisible(self._objects_box, 0, _px(20))
+        needed = self._objects_content.sizeHint().height() + _px(40)
+        viewport_h = max(1, self._scroll.viewport().height())
+        hidden = max(0, needed - viewport_h)
+        if hidden > 0:
+            self._animate_to_height(self.height() + hidden)
 
     def _on_filter_changed(self, text: str) -> None:
         self._filter_text = text.lower().strip()
