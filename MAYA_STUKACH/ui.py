@@ -208,6 +208,7 @@ def _build_qss() -> str:
         "QToolButton { color: #8c8c8c; border: none; font-size: %dpx; padding: 0; }"
         "QToolButton:hover { color: #e6e6e6; }"
         "QFrame#catBox { background: #212121; border: 1px solid #303030; border-radius: 4px; }"
+        "QWidget#StukachPanel { background-color: #1d1d1d; border: 1px solid #2f2f2f; border-radius: 8px; }"
     ) % (f, _px(4), _px(10), f, c, c, _px(2), _px(6), f,
          f, _px(20), _px(12), _px(30), max(1, f - 1))
 
@@ -1084,6 +1085,7 @@ class StukachPanel(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.setObjectName(WINDOW_NAME)
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setWindowTitle("STUKACH")
         self.setMinimumWidth(dpi_scale(378))
         self.setMinimumHeight(dpi_scale(640))
@@ -2095,7 +2097,7 @@ def _dock_builder(wc_name: str) -> None:
         layout = host.layout()
         if layout is None:
             layout = QtWidgets.QVBoxLayout(host)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(8, 8, 8, 8)   # dock bg shows around the panel
         panel = StukachPanel(parent=host)
         # docked: the workspace column may be narrower than the floating
         # minimum (378) — a wider minimum was centered and clipped both sides
