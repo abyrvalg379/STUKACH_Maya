@@ -76,7 +76,7 @@ _CHECK_OVERLAY_COLORS = {
     "face_aspect_ratio": "#FFD900", "z_fighting": "#FF0000",
     "non_applied_transform": "#FF0000", "scale": "#FF6600",
     "construction_history": "#808080", "origin_at_zero": "#FFCC00",
-    "modifier_stack": "#9900FF", "symmetry_x": "#FF2626", "symmetry_y": "#26FF26",
+    "symmetry_x": "#FF2626", "symmetry_y": "#26FF26",
     "symmetry_z": "#2666FF", "uv_single_set": "#0080FF", "uv_udim_ready": "#0080FF",
     "uv_udim_bounds": "#B233FF", "uv_material_udim": "#FF3399",
     "uv_overlap": "#FF3300", "uv_stretch": "#FF8000", "uv_texel_density": "#4DE680",
