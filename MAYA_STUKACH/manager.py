@@ -561,6 +561,11 @@ class MayaCheck:
         if not cls._running:
             cls._notify_ui()   # still sync category headers etc.
             return
+        if not any(cls._enabled_checks.values()):
+            cls._val_queue = []
+            _overlay.clear()
+            cls._notify_ui()
+            return
         cls._scene_ctx = build_scene_ctx(cls.objects)
         wanted = {k for k, en in cls._enabled_checks.items() if en}
         cls._wanted_flags = {
@@ -1192,6 +1197,8 @@ th{{background:#2a2a2a}}.meta{{margin-bottom:20px}}.status{{font-weight:bold;fon
             return
         if cls._val_queue:
             return   # previous pass still draining — dirty detection will skip
+        if not any(cls._enabled_checks.values()):
+            return   # nothing enabled — do not churn the viewport
         cls.refresh_objects()
         cls.run_all()
 
