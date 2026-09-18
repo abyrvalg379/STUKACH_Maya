@@ -725,7 +725,7 @@ class MatAssignment(BaseCheck):
 
 # ─── NEW CHECKERS (Phase 2 port from Blender) ────────────────────────────────
 #
-# numpy + scipy are required for these checkers (symmetry, invalid_normals,
+# numpy + scipy are required for these checkers (symmetry,
 # the UV checks, duplicate_verts). Install via:
 #   mayapy -m pip install numpy scipy
 # They were added in Phase 2 of the Blender→Maya port.
@@ -844,112 +844,8 @@ class FaceAspectRatio(BaseCheck):
         self._count = len(bad)
 
 
-# ─── TOPOLOGY: flipped_normals ───────────────────────────────────────────────
-#
-# Blender uses bmesh.ops.recalc_face_normals (a flood-fill consistency check),
-# which has no 1:1 Maya equivalent. We approximate by duplicating the mesh and
-# running Maya's Mesh.cleanup / polyNormal auto-normalize, then comparing the
-# per-face normal before/after. Faces whose normal flipped are reported.
-
-class FlippedNormals(BaseCheck):
-    """Faces whose normals are inconsistent with the auto-computed orientation.
-
-    Ported from Blender's neighbor-majority approach. For each face, compare
-    its normal against the average of its edge-adjacent neighbours. If the dot
-    product is negative (normal points inward relative to neighbours) and the
-    MAJORITY of neighbours agree it's opposing, the face is flipped.
-    No mesh duplication required — pure local comparison.
-    """
-    severity = "WARNING"
-    _MAX_FACES = 100_000
-
-    def run(self, dag_path: om.MDagPath) -> None:
-        self.reset()
-        sdp = _shape_dag(dag_path)
-        mesh = om.MFnMesh(sdp)
-        shape = mesh.fullPathName()
-        n_faces = mesh.numPolygons
-        if n_faces < 2 or n_faces > self._MAX_FACES:
-            return
-
-        # Collect face normals (one MItMeshPolygon pass)
-        normals = [None] * n_faces
-        it = om.MItMeshPolygon(sdp)
-        while not it.isDone():
-            normals[it.index()] = it.getNormal(0, om.MSpace.kObject)
-            it.next()
-
-        # Build face adjacency from edges (one MItMeshEdge pass)
-        face_adj = [set() for _ in range(n_faces)]
-        eit = om.MItMeshEdge(sdp)
-        while not eit.isDone():
-            faces = list(eit.getConnectedFaces())
-            for i in range(len(faces)):
-                for j in range(i + 1, len(faces)):
-                    face_adj[faces[i]].add(faces[j])
-                    face_adj[faces[j]].add(faces[i])
-            eit.next()
-
-        # Detect flipped faces: normal opposes majority of neighbours
-        flipped = []
-        for fi in range(n_faces):
-            if not face_adj[fi]:
-                continue
-            ni = normals[fi]
-            oppose = sum(1 for fj in face_adj[fi]
-                         if ni.x * normals[fj].x + ni.y * normals[fj].y + ni.z * normals[fj].z < -0.5)
-            if oppose > len(face_adj[fi]) * 0.5:
-                flipped.append(f"{shape}.f[{fi}]")
-
-        self._bad_components = flipped
-        self._count = len(flipped)
-
-
-# ─── TOPOLOGY: invalid_normals ───────────────────────────────────────────────
-
-class InvalidNormals(BaseCheck):
-    """Custom (locked) split normals that are zero-length or flipped vs. face normal.
-
-    Uses the MFnMesh per-polygon vertex normals (only present when normals are
-    locked = custom). A loop normal is bad if length^2 < 1e-12 (degenerate) or
-    dot(custom, face_normal) < 0 (flipped). Reduced to faces: any bad loop → bad face.
-    """
-    severity = "WARNING"
-
-    def run(self, dag_path: om.MDagPath) -> None:
-        self.reset()
-        sdp = _shape_dag(dag_path)
-        mesh = om.MFnMesh(sdp)
-        shape = mesh.fullPathName()
-        n_faces = mesh.numPolygons
-        if n_faces == 0:
-            return
-
-        bad_faces = []
-        it = om.MItMeshPolygon(sdp)
-        while not it.isDone():
-            fi = it.index()
-            face_n = it.getNormal(om.MSpace.kObject)
-            # Per-vertex normals on this face (custom split normals)
-            face_verts = it.getVertices()
-            is_bad = False
-            for vi in face_verts:
-                try:
-                    vn = mesh.getFaceVertexNormal(fi, int(vi), om.MSpace.kObject)
-                except Exception:
-                    continue
-                len2 = vn.x * vn.x + vn.y * vn.y + vn.z * vn.z
-                if len2 < 1e-12:
-                    is_bad = True; break
-                dot = vn.x * face_n.x + vn.y * face_n.y + vn.z * face_n.z
-                if dot < 0.0:
-                    is_bad = True; break
-            if is_bad:
-                bad_faces.append(f"{shape}.f[{fi}]")
-            it.next()
-        self._bad_components = bad_faces
-        self._count = len(bad_faces)
-
+# (flipped_normals / invalid_normals removed — Blender dropped both as
+# unreliable on interior geometry; see STUKACH history)
 
 # ─── SYMMETRY ─────────────────────────────────────────────────────────────────
 
@@ -2250,8 +2146,6 @@ CHECK_TYPES: dict = {
     "boundary_edges":       BoundaryEdges,
     "duplicate_verts":      DuplicateVerts,
     "face_aspect_ratio":    FaceAspectRatio,
-    "flipped_normals":      FlippedNormals,
-    "invalid_normals":      InvalidNormals,
     "z_fighting":           ZFighting,
     # TRANSFORMS
     "non_applied_transform": NonAppliedTransform,
@@ -2301,7 +2195,7 @@ CHECK_CATEGORIES: dict = {
     "TOPOLOGY":   ("non_manifold", "boundary_edges", "isolated_verts",
                    "duplicate_verts", "face_aspect_ratio",
                    "triangles", "ngons", "poles", "zero_area",
-                   "flipped_normals", "invalid_normals", "z_fighting",
+                   "z_fighting",
                    "hard_edges", "lamina", "zero_length_edges", "starlike"),
     "TRANSFORMS": ("non_applied_transform", "scale", "construction_history",
                    "origin_at_zero", "modifier_stack",
