@@ -548,6 +548,13 @@ class MayaCheck:
             targets = _all_mesh_transforms()
         else:  # SELECTED
             targets = cmds.ls(selection=True, long=True, type='transform') or []
+            # SELECTED mirrors the current selection EXACTLY: objects that
+            # left the selection leave the validation (previously they
+            # accumulated, which defeated the scope's purpose)
+            target_set = set(targets)
+            for t in list(cls.objects.keys()):
+                if t not in target_set:
+                    del cls.objects[t]
         for t in targets:
             cls.add_object(t)
         # Drop deleted / no-longer-existing objects
