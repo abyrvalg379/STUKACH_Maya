@@ -495,7 +495,8 @@ class _CategoryBox(QtWidgets.QFrame):
         # QPushButton + menu: an editable QComboBox rendered dark-on-dark
         # artifacts at some DPI scales, so a plain button opens a menu
         self._uv_rename_target = QtWidgets.QPushButton("map1")
-        self._uv_rename_target.setFixedHeight(_px(22))
+        self._uv_rename_target.setFixedHeight(_px(26))   # scaled-monitor
+        # fonts need more height than logical metrics — 22px clipped the text
         self._uv_rename_target.setMinimumWidth(_px(70))
         self._uv_rename_target.setToolTip(
             "Pick or type the canonical UV set name")
@@ -507,7 +508,7 @@ class _CategoryBox(QtWidgets.QFrame):
             " padding: %dpx %dpx; font-size: %dpx; }"
             "QPushButton:hover { background: #3d3d3d; }"
             "QPushButton::menu-indicator { subcontrol-position: right center;"
-            " right: 4px; }" % (_px(2), _px(6), _FONT_PX))
+            " right: 4px; }" % (_px(3), _px(6), _FONT_PX))
         # no setMenu(): a menu-bearing QPushButton can fall back to the
         # native white style on some setups — we open the menu manually
         self._uv_rename_target.clicked.connect(self._on_uv_target_menu)
