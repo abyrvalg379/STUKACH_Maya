@@ -2063,8 +2063,12 @@ class SnapshotCheck(BaseCheck):
 
 
 class HardEdges(SnapshotCheck):
-    """Non-smooth, non-boundary edges (component mode 'soft/hard' display)."""
-    severity = "WARNING"
+    """Non-smooth, non-boundary edges — INSPECTION metric, not validation.
+
+    On hardsurf models every edge is intentionally hard, so flagging them as
+    issues is meaningless. INFO severity keeps it out of blockers/warnings
+    roll-ups and the asset status; use it to inspect/select hard edges."""
+    severity = "INFO"
 
     def run_snapshot(self, snap):
         bad = [
