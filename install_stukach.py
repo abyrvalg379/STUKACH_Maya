@@ -168,7 +168,7 @@ def _add_shelf_button():
     cmds.shelfButton(
         parent=custom,
         label="STUKACH",
-        annotation="STUKACH v1.0 — mesh validation (hot-reload)",
+        annotation="STUKACH v1.1 — mesh validation (hot-reload)",
         image=icon,
         image1=icon,
         command=cmd,
@@ -216,7 +216,7 @@ def install():
         results.append("Dependencies: pip failed (install manually: mayapy -m pip install numpy scipy)")
 
     # Report
-    msg = "STUKACH v1.0 installed!\n\n" + "\n".join("  " + r for r in results)
+    msg = "STUKACH v1.1 installed!\n\n" + "\n".join("  " + r for r in results)
     cmds.confirmDialog(title="STUKACH Installer", message=msg, button=["OK"])
     print("[STUKACH] " + msg.replace("\n", " | "))
 
