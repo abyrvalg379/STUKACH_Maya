@@ -496,7 +496,7 @@ class _CategoryBox(QtWidgets.QFrame):
         # artifacts at some DPI scales, so a plain button opens a menu
         self._uv_rename_target = QtWidgets.QPushButton("map1")
         self._uv_rename_target.setFixedHeight(_px(22))
-        self._uv_rename_target.setMinimumWidth(_px(84))
+        self._uv_rename_target.setMinimumWidth(_px(70))
         self._uv_rename_target.setToolTip(
             "Pick or type the canonical UV set name")
         menu = QtWidgets.QMenu(self._uv_rename_target)
@@ -1059,7 +1059,7 @@ class StukachPanel(QtWidgets.QWidget):
         super().__init__(parent=parent)
         self.setObjectName(WINDOW_NAME)
         self.setWindowTitle("STUKACH")
-        self.setMinimumWidth(dpi_scale(360))
+        self.setMinimumWidth(dpi_scale(378))
         self.setMinimumHeight(dpi_scale(640))
         self.setStyleSheet(_QSS)
 
@@ -1301,7 +1301,12 @@ class StukachPanel(QtWidgets.QWidget):
         presets_row.setSpacing(_px(2))
         self._preset_combo = QtWidgets.QComboBox()
         self._preset_combo.setFixedHeight(_px(20))
-        self._preset_combo.setMinimumWidth(_px(70))
+        self._preset_combo.setMinimumWidth(_px(44))
+        # allow the combo to shrink below its text sizeHint: a wide minimum
+        # made the row overflow the scroll viewport (right-edge clipping)
+        self._preset_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self._preset_combo.setMinimumContentsLength(3)
         self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
         presets_row.addWidget(self._preset_combo, stretch=1)
         self._preset_save_btn = QtWidgets.QPushButton("+")
