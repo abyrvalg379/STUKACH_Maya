@@ -481,13 +481,17 @@ class _CategoryBox(QtWidgets.QFrame):
     def _build_uv_names_block(self, parent) -> QtWidgets.QWidget:
         """UV set naming: summary + canonical rename (Blender UV Map Names)."""
         w = QtWidgets.QWidget(parent)
-        lay = QtWidgets.QHBoxLayout(w)
-        lay.setContentsMargins(_px(2), _px(2), _px(2), _px(2))
-        lay.setSpacing(_px(3))
+        outer = QtWidgets.QVBoxLayout(w)
+        outer.setContentsMargins(_px(2), _px(2), _px(2), _px(2))
+        outer.setSpacing(_px(3))
         self._uv_names_summary = QtWidgets.QLabel("UV Sets:")
         self._uv_names_summary.setStyleSheet(
             "color: #909090; font-size: %dpx;" % max(1, _FONT_PX - 1))
-        lay.addWidget(self._uv_names_summary, stretch=1)
+        outer.addWidget(self._uv_names_summary)
+        lay = QtWidgets.QHBoxLayout()
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(_px(3))
+        outer.addLayout(lay)
         # QPushButton + menu: an editable QComboBox rendered dark-on-dark
         # artifacts at some DPI scales, so a plain button opens a menu
         self._uv_rename_target = QtWidgets.QPushButton("map1")
@@ -1061,7 +1065,7 @@ class StukachPanel(QtWidgets.QWidget):
 
         self._obj_rows: Dict[str, _ObjectRow] = {}
         self._filter_text = ""
-        self._issues_only = False
+        self._issues_only = True   # issues-only by default (user request)
 
         self._build_ui()
         # Fill the window vertically — without this the panel reports a small
@@ -1413,8 +1417,10 @@ class StukachPanel(QtWidgets.QWidget):
         filt_row.addWidget(self._filter_edit, stretch=1)
         self._issues_only_btn = QtWidgets.QPushButton("Issues")
         self._issues_only_btn.setCheckable(True)
+        self._issues_only_btn.setChecked(True)   # issues-only by default
         self._issues_only_btn.setFixedHeight(_px(22))
-        self._issues_only_btn.setToolTip("Show only objects with issues")
+        self._issues_only_btn.setToolTip(
+            "ON: only objects with issues; OFF: all tracked objects")
         self._issues_only_btn.clicked.connect(self._on_issues_only)
         filt_row.addWidget(self._issues_only_btn)
         oc_layout.addLayout(filt_row)
