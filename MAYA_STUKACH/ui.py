@@ -1553,7 +1553,7 @@ class StukachPanel(QtWidgets.QWidget):
         exp_layout.setContentsMargins(_px(2), _px(4), _px(2), _px(2))
         exp_layout.setSpacing(_px(3))
 
-        lbl_w = _px(58)
+        lbl_w = _px(70)   # 'Checkpoint:' is the longest label
         row1 = QtWidgets.QHBoxLayout()
         row1.setSpacing(_px(3))
         lbl1 = QtWidgets.QLabel("Export:")
@@ -2100,6 +2100,10 @@ def _dock_builder(wc_name: str) -> None:
         # docked: the workspace column may be narrower than the floating
         # minimum (378) — a wider minimum was centered and clipped both sides
         panel.setMinimumWidth(dpi_scale(280))
+        # the floating window's extra right-margin reserve is not needed
+        # inside a dock column: asymmetric margins made the content wider
+        # than the column and clipped both edges
+        panel.layout().setContentsMargins(_px(6), _px(6), _px(6), _px(6))
         layout.addWidget(panel)
         _panel_instance = panel
     except Exception as e:
@@ -2209,7 +2213,7 @@ def launch() -> StukachPanel:
         cmds.workspaceControl(_WC, label="STUKACH", uiScript=ui_script)
         cmds.workspaceControl(_WC, edit=True, restore=True)
         cmds.workspaceControl(_WC, edit=True, dockToControl=("AttributeEditor", "left"))
-        cmds.workspaceControl(_WC, edit=True, width=dpi_scale(420))
+        cmds.workspaceControl(_WC, edit=True, width=dpi_scale(460))
         if _panel_instance is not None:
             _panel_instance.setWindowFlags(Qt.Widget)
             _panel_instance.show()
