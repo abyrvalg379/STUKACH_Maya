@@ -2085,8 +2085,12 @@ class TrailingNumbers(SnapshotCheck):
 
 
 class UncenteredPivots(SnapshotCheck):
-    """Rotate pivot not at world origin."""
-    severity = "WARNING"
+    """Rotate pivot far from the bbox center (5% of the bbox diagonal).
+
+    Convention check, INFO-level like OriginAtZero: bbox-center pivots are
+    not a universal rule — e.g. buildings are often assembled with every
+    pivot at the world origin."""
+    severity = "INFO"
 
     _THRESHOLD = 0.05   # fraction of the bbox diagonal
 
