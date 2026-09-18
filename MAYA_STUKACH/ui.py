@@ -1054,7 +1054,10 @@ class StukachPanel(QtWidgets.QWidget):
         self._progress_label.setStyleSheet(
             "color: #4772b3; font-size: %dpx; font-style: italic;"
             % max(1, _FONT_PX - 1))
-        self._progress_label.setVisible(False)
+        self._progress_label.setFixedHeight(_px(13))
+        # space is ALWAYS reserved: showing/hiding the label made the
+        # panel jitter on every short live-validation pass
+        self._progress_label.setText("")
         score_layout.addWidget(self._progress_label)
 
         score_layout.addLayout(line1)
@@ -1770,12 +1773,11 @@ class StukachPanel(QtWidgets.QWidget):
         summary = mc.category_summary()
         self._health_strip.refresh(summary)
 
-        # progress indicator
+        # progress indicator — text only for substantial queues, otherwise
+        # short live passes would flash the label half a second at a time
         pending = len(mc._val_queue)
-        self._progress_label.setVisible(pending > 0)
-        if pending:
-            self._progress_label.setText(
-                "Validating... %d to go" % pending)
+        self._progress_label.setText(
+            "Validating... %d to go" % pending if pending > 3 else "")
 
         coord = mc.coordinator_mode
         if not mc.objects:
