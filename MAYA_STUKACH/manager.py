@@ -303,9 +303,15 @@ class MayaCheck:
 
     @classmethod
     def set_check_enabled(cls, key: str, enabled: bool) -> None:
-        cls._enabled_checks[key] = enabled
-        for mco in cls.objects.values():
-            mco.enabled[key] = enabled
+        if cls._enabled_checks.get(key) != enabled:
+            cls._enabled_checks[key] = enabled
+            for mco in cls.objects.values():
+                mco.enabled[key] = enabled
+                mco.snapshot = None   # snapshot contents depend on enabled set
+        else:
+            cls._enabled_checks[key] = enabled
+            for mco in cls.objects.values():
+                mco.enabled[key] = enabled
 
     # ── batch operations (single run_all for the whole set) ───────────────────
 
@@ -316,10 +322,17 @@ class MayaCheck:
         Batch buttons (All/None/severity/category) use this so the panel does
         one validation pass instead of N (one per toggled checkbox).
         """
+        changed = False
         for key, en in key_to_enabled.items():
+            if cls._enabled_checks.get(key) != en:
+                changed = True
             cls._enabled_checks[key] = en
             for mco in cls.objects.values():
                 mco.enabled[key] = en
+        if changed:
+            # snapshot contents depend on the enabled set (want_* flags)
+            for mco in cls.objects.values():
+                mco.snapshot = None
         if run and cls._running:
             cls.run_all()
         cls._notify_ui()
