@@ -23,6 +23,7 @@ import maya.api.OpenMaya as om
 
 from . import core as _core
 from . import overlay as _overlay
+from .snapshot import build_snapshot, build_scene_ctx
 
 # Single source of truth for the panel header, reports and debug info.
 _VERSION = "1.1.0"
@@ -93,6 +94,7 @@ class MayaCheckObject:
         self._valid: bool = True
         self._topo_key: tuple = None      # (n_verts, n_edges, n_faces)
         self._transform_key: tuple = None  # world matrix hash
+        self.snapshot = None              # lazily built MeshSnapshot
 
     def _is_topo_dirty(self) -> bool:
         """Check if mesh topology has changed since last run."""
@@ -106,6 +108,7 @@ class MayaCheckObject:
             return True
         if key != self._topo_key:
             self._topo_key = key
+            self.snapshot = None   # stale — rebuild on next snapshot check
             return True
         return False
 
@@ -159,11 +162,24 @@ class MayaCheckObject:
                 if key in _TRANSFORM_CHECKS and not xform_dirty:
                     continue
             try:
-                checker.run(self.dag_path)
+                if isinstance(checker, _core.SnapshotCheck):
+                    if self.snapshot is None:
+                        self.snapshot = build_snapshot(
+                            self.dag_path, self.transform,
+                            **MayaCheck._wanted_flags)
+                    checker.run(self.dag_path, ctx=self._check_ctx())
+                else:
+                    checker.run(self.dag_path)
                 checker._ran = True
             except Exception as e:
                 checker.reset()
-                alog(f"Error in {key} on {self.transform}: {e}")
+                alog("Error in %s on %s: %s" % (key, self.transform, e))
+
+    def _check_ctx(self) -> dict:
+        ctx = {"snapshot": self.snapshot}
+        if MayaCheck._scene_ctx is not None:
+            ctx["snapshot"].scene = MayaCheck._scene_ctx
+        return ctx
 
     def _is_alive(self) -> bool:
         try:
@@ -239,6 +255,9 @@ class MayaCheck:
     active_check: Optional[str] = None          # key of check in overlay focus, or None
     coordinator_mode: bool = False              # True = hide INFO checks, show asset status badge
     live: bool = False                          # live mode: panel timer calls live_tick()
+    _scene_ctx: dict = None                     # shared scene context for snapshot checks
+    _val_queue: List[str] = []                  # progressive validation queue
+    _wanted_flags: dict = {}                    # snapshot expensive-flag switches
     _next_issue_ptr: int = 0                    # cycling index for next_issue()
     _job_ids: List[int] = []
     _running: bool = False
@@ -265,6 +284,7 @@ class MayaCheck:
     @classmethod
     def stop(cls) -> None:
         cls._running = False
+        cls._val_queue = []
         cls._remove_jobs()
         cls.objects.clear()
         _overlay.clear()
@@ -459,8 +479,17 @@ class MayaCheck:
         if not cls._running:
             cls._notify_ui()   # still sync category headers etc.
             return
-        for mco in list(cls.objects.values()):
-            mco.run_enabled()
+        cls._scene_ctx = build_scene_ctx(cls.objects)
+        wanted = {k for k, en in cls._enabled_checks.items() if en}
+        cls._wanted_flags = {
+            "want_area": "face_aspect_ratio" in wanted,
+            "want_lamina": "lamina" in wanted,
+            "want_starlike": "starlike" in wanted,
+            "want_uvs": "missing_uvs" in wanted,
+        }
+        cls._val_queue = list(cls.objects.keys())
+        if cls._val_queue:
+            cls._notify_ui()
         # Refresh viewport tinting from the fresh results
         _overlay.update(cls.objects)
         cls._notify_ui()
@@ -472,6 +501,42 @@ class MayaCheck:
             mco.run_enabled()
             _overlay.update(cls.objects)
             cls._notify_ui()
+
+    # ── progressive validation (UI timer drains the queue; Maya UI stays alive)
+
+    @classmethod
+    def validation_step(cls, budget_s: float = 0.4) -> bool:
+        """Validate queued objects until the time budget is spent.
+        Returns True when the queue is drained. Never blocks long."""
+        import time
+        if not cls._val_queue:
+            return True
+        if cls._scene_ctx is None:
+            cls._scene_ctx = build_scene_ctx(cls.objects)
+        t0 = time.time()
+        while cls._val_queue and time.time() - t0 < budget_s:
+            t = cls._val_queue.pop(0)
+            mco = cls.objects.get(t)
+            if not mco:
+                continue
+            t1 = time.time()
+            mco.run_enabled()
+            dt = time.time() - t1
+            if dt > 1.0:
+                alog("slow object %.1fs: %s" % (dt, t))
+        _overlay.update(cls.objects)
+        cls._notify_ui()
+        return not cls._val_queue
+
+    @classmethod
+    def validation_pending(cls) -> bool:
+        return bool(cls._val_queue)
+
+    @classmethod
+    def finish_validation(cls) -> None:
+        """Synchronous drain (export/publish paths). Blocking by definition."""
+        while not cls.validation_step(budget_s=5.0):
+            pass
 
     # ── stats ─────────────────────────────────────────────────────────────────
 
@@ -638,6 +703,8 @@ th{{background:#2a2a2a}}.meta{{margin-bottom:20px}}.status{{font-weight:bold;fon
         """
         if not cls.objects or not cls._running:
             return "ok"   # nothing validated — allow export
+        if cls._val_queue:
+            cls.finish_validation()   # gate on complete data
         status = cls.asset_status()
         if status == "CRITICAL":
             return "blocked"
@@ -1064,15 +1131,21 @@ th{{background:#2a2a2a}}.meta{{margin-bottom:20px}}.status{{font-weight:bold;fon
                 pass
         cls._job_ids = []
 
+    _in_selection_callback: bool = False
+
     @classmethod
     def _on_selection_changed(cls) -> None:
-        if not cls._running:
-            return
+        if not cls._running or cls._in_selection_callback:
+            return   # guard: re-entrant SelectionChanged (select inside run) = freeze
         # Only SELECTED scope reacts to the active selection changing — SCENE
         # scope already covers everything and would just churn on every pick.
         if cls.scope == _SCOPE_SELECTED:
-            cls.refresh_objects()
-            cls.run_all()
+            cls._in_selection_callback = True
+            try:
+                cls.refresh_objects()
+                cls.run_all()
+            finally:
+                cls._in_selection_callback = False
 
     @classmethod
     def _on_scene_changed(cls) -> None:

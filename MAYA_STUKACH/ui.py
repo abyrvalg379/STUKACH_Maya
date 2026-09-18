@@ -127,6 +127,11 @@ _CHECK_SWATCH = {
     "obj_naming": "#FF8000", "col_naming": "#808080", "mat_numbering": "#FF6619",
     "mat_suffix": "#808080", "mat_assignment": "#808080",
     "missing_textures": "#FF3333", "unused_data": "#99661A",
+    "hard_edges": "#CC6600", "lamina": "#FF0066",
+    "zero_length_edges": "#FF33CC", "starlike": "#66FFCC",
+    "missing_uvs": "#CCFF33", "duplicated_names": "#FF1111",
+    "shape_names": "#FF9900", "trailing_numbers": "#FFCC66",
+    "uncentered_pivots": "#FFCC00", "parent_geometry": "#99FF33",
 }
 
 # Per-check color overrides (user-chosen via swatch click)
@@ -155,6 +160,11 @@ _CHECK_DISPLAY_NAMES = {
     "col_naming": "Group Name", "mat_numbering": "Mat Numbering",
     "mat_suffix": "Mat Suffix", "mat_assignment": "Mat Assignment",
     "missing_textures": "Missing Textures", "unused_data": "Unused Data",
+    "hard_edges": "Hard Edges", "lamina": "Lamina",
+    "zero_length_edges": "Zero Length Edges", "starlike": "Starlike",
+    "missing_uvs": "Missing UVs", "duplicated_names": "Duplicated Names",
+    "shape_names": "Shape Names", "trailing_numbers": "Trailing Numbers",
+    "uncentered_pivots": "Uncentered Pivots", "parent_geometry": "Parent Geometry",
 }
 
 _YELLOW_THRESHOLDS = {"triangles": 50, "ngons": 10, "poles": 20}
@@ -928,9 +938,11 @@ class StukachPanel(QtWidgets.QWidget):
         _manager.MayaCheck._ui_callback = self.refresh
 
         # Live-mode tick (panel-owned so hot-reload kills it with the panel)
+        # one timer drives BOTH progressive validation (150ms) and Live (1s)
         self._live_timer = QtCore.QTimer(self)
-        self._live_timer.setInterval(1000)
-        self._live_timer.timeout.connect(self._on_live_tick)
+        self._live_timer.setInterval(150)
+        self._tick_count = 0
+        self._live_timer.timeout.connect(self._on_tick)
         self._live_timer.start()
 
     # ── construction ──────────────────────────────────────────────────────────
@@ -1038,6 +1050,13 @@ class StukachPanel(QtWidgets.QWidget):
         self._score_scope.setStyleSheet(
             "color: #909090; font-size: %dpx;" % max(1, _FONT_PX - 2))
         line1.addWidget(self._score_scope)
+        self._progress_label = QtWidgets.QLabel("")
+        self._progress_label.setStyleSheet(
+            "color: #4772b3; font-size: %dpx; font-style: italic;"
+            % max(1, _FONT_PX - 1))
+        self._progress_label.setVisible(False)
+        score_layout.addWidget(self._progress_label)
+
         score_layout.addLayout(line1)
 
         self._health_strip = _HealthStrip(self._score_widget)
@@ -1449,13 +1468,19 @@ class StukachPanel(QtWidgets.QWidget):
     def _on_live_toggled(self) -> None:
         _manager.MayaCheck.set_live(self._mode_live_btn.isChecked())
 
-    def _on_live_tick(self) -> None:
+    def _on_tick(self) -> None:
         mc = _manager.MayaCheck
-        if not mc.live or not mc._running:
-            return
         if QtWidgets.QApplication.activeModalWidget() is not None:
-            return   # never revalidate under a modal dialog
-        mc.live_tick()
+            return   # never validate under a modal dialog
+        # progressive validation: drain the queue in small time-budgeted steps
+        if mc.validation_pending():
+            mc.validation_step()
+            self._tick_count += 1
+        # live mode: enqueue dirty revalidation once per second
+        self._tick_count += 1
+        if mc.live and mc._running and self._tick_count % 7 == 0:
+            if mc.objects:
+                mc.live_tick()
 
     def _on_units_toggled(self, state: int) -> None:
         self._update_scene_units(int(state) == 2)
@@ -1744,6 +1769,13 @@ class StukachPanel(QtWidgets.QWidget):
         fs2 = max(1, _FONT_PX - 2)
         summary = mc.category_summary()
         self._health_strip.refresh(summary)
+
+        # progress indicator
+        pending = len(mc._val_queue)
+        self._progress_label.setVisible(pending > 0)
+        if pending:
+            self._progress_label.setText(
+                "Validating... %d to go" % pending)
 
         coord = mc.coordinator_mode
         if not mc.objects:
