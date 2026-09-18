@@ -160,7 +160,7 @@ _CHECK_DISPLAY_NAMES = {
     "col_naming": "Group Name", "mat_numbering": "Mat Numbering",
     "mat_suffix": "Mat Suffix", "mat_assignment": "Mat Assignment",
     "missing_textures": "Missing Textures", "unused_data": "Unused Data",
-    "hard_edges": "Hard Edges", "lamina": "Lamina",
+    "hard_edges": "Sharp Edges Not Hard", "lamina": "Lamina",
     "zero_length_edges": "Zero Length Edges", "starlike": "Starlike",
     "missing_uvs": "Missing UVs", "duplicated_names": "Duplicated Names",
     "shape_names": "Shape Names", "trailing_numbers": "Trailing Numbers",
