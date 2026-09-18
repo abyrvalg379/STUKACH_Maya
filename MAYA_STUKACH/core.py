@@ -2063,19 +2063,64 @@ class SnapshotCheck(BaseCheck):
 
 
 class HardEdges(SnapshotCheck):
-    """Non-smooth, non-boundary edges — INSPECTION metric, not validation.
+    """Sharp edges (dihedral angle >= threshold) that are NOT marked hard.
 
-    On hardsurf models every edge is intentionally hard, so flagging them as
-    issues is meaningless. INFO severity keeps it out of blockers/warnings
-    roll-ups and the asset status; use it to inspect/select hard edges."""
-    severity = "INFO"
+    Smooth shading across a sharp corner produces shading artifacts — such
+    edges must be hard (or handled by custom normals). Listing every hard
+    edge is meaningless on hardsurf, so only the MISSED ones are flagged.
+    """
+    severity = "WARNING"
+    ANGLE_THRESHOLD_DEG = 30.0
+
+    @staticmethod
+    def _face_normal(snap, face_id):
+        """Newell's method — robust for concave/n-gon faces."""
+        vs = snap.face_verts[face_id]
+        nx = ny = nz = 0.0
+        pts = snap.points
+        for i in range(len(vs)):
+            a = pts[vs[i]]
+            b = pts[vs[(i + 1) % len(vs)]]
+            nx += (a[1] - b[1]) * (a[2] + b[2])
+            ny += (a[2] - b[2]) * (a[0] + b[0])
+            nz += (a[0] - b[0]) * (a[1] + b[1])
+        length = (nx * nx + ny * ny + nz * nz) ** 0.5
+        if length < 1e-12:
+            return None
+        return (nx / length, ny / length, nz / length)
 
     def run_snapshot(self, snap):
-        bad = [
-            snap.shape + ".e[%d]" % i
-            for i, (smooth, conn) in enumerate(zip(snap.edge_smooth, snap.edge_conn))
-            if smooth is False and conn > 1
-        ]
+        import math
+        # edge id -> adjacent face ids (from face corner walks)
+        edge_faces = {}
+        face_edge_pairs = {}
+        for eid, (v0, v1) in enumerate(snap.edges):
+            face_edge_pairs[(v0, v1) if v0 < v1 else (v1, v0)] = eid
+        for fid, vs in enumerate(snap.face_verts):
+            n = len(vs)
+            for i in range(n):
+                a, b = vs[i], vs[(i + 1) % n]
+                key = (a, b) if a < b else (b, a)
+                eid = face_edge_pairs.get(key)
+                if eid is not None:
+                    edge_faces.setdefault(eid, []).append(fid)
+
+        threshold = math.radians(self.ANGLE_THRESHOLD_DEG)
+        cos_threshold = math.cos(threshold)
+        bad = []
+        for eid, (v0, v1) in enumerate(snap.edges):
+            if snap.edge_smooth[eid] is False or snap.edge_conn[eid] != 2:
+                continue   # already hard, or boundary/non-manifold
+            faces = edge_faces.get(eid, [])
+            if len(faces) != 2:
+                continue
+            n0 = self._face_normal(snap, faces[0])
+            n1 = self._face_normal(snap, faces[1])
+            if n0 is None or n1 is None:
+                continue
+            dot = n0[0] * n1[0] + n0[1] * n1[1] + n0[2] * n1[2]
+            if dot < cos_threshold:   # angle > threshold while edge is smooth
+                bad.append(snap.shape + ".e[%d]" % eid)
         self._count = len(bad)
         self._bad_components = bad
 
