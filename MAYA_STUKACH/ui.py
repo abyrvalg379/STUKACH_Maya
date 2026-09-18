@@ -1087,7 +1087,10 @@ class StukachPanel(QtWidgets.QWidget):
 
     def _build_ui(self) -> None:
         root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(_px(6), _px(6), _px(6), _px(6))
+        # Right margin reserve: on scaled monitors Qt's logical layout is
+        # narrower than the rendered text, which clipped everything anchored
+        # to the right edge (Viewport, category checkboxes, +/-, Debug Info)
+        root.setContentsMargins(_px(6), _px(6), _px(22), _px(6))
         root.setSpacing(_px(4))
 
         # ── header: title + subtitle ──
