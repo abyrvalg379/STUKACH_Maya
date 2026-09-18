@@ -1073,6 +1073,7 @@ class _IgnoredBox(QtWidgets.QWidget):
 # ── Main panel ────────────────────────────────────────────────────────────────
 
 WINDOW_NAME = "StukachPanel"
+_WC = "StukachWorkspaceControl"
 _WORKSPACE_CONTROL = "StukachPanelWorkspaceControl"
 _DOCK_CONTROL = "StukachPanelDockControl"
 _HOST_FORM = "stukachHostForm"
@@ -2075,6 +2076,33 @@ class StukachPanel(QtWidgets.QWidget):
 _panel_instance: StukachPanel = None
 
 
+def _dock_builder(wc_name: str) -> None:
+    """uiScript callback of the workspaceControl: parents a StukachPanel
+    into the docked control. Runs on restore (scene start / layout load)."""
+    try:
+        # Maya 2025 dropped the -marshal query flag; findControl returns the
+        # Qt pointer of the workspaceControl's main widget
+        ptr = omui.MQtUtil.findControl(wc_name)
+        if not ptr:
+            return
+        host = wrapInstance(int(ptr), QtWidgets.QWidget)
+        for w in host.findChildren(QtWidgets.QWidget, WINDOW_NAME):
+            try:
+                w.deleteLater()
+            except Exception:
+                pass
+        global _panel_instance
+        layout = host.layout()
+        if layout is None:
+            layout = QtWidgets.QVBoxLayout(host)
+        layout.setContentsMargins(0, 0, 0, 0)
+        panel = StukachPanel(parent=host)
+        layout.addWidget(panel)
+        _panel_instance = panel
+    except Exception as e:
+        _manager.alog("dock builder failed: %s" % e)
+
+
 def _maya_main_window():
     try:
         ptr = omui.MQtUtil.mainWindow()
@@ -2087,7 +2115,7 @@ def _maya_main_window():
 
 def _cleanup_dock_leftovers() -> None:
     """Remove any docks/forms left by previous STUKACH versions."""
-    for ctrl in (_DOCK_CONTROL, _WORKSPACE_CONTROL):
+    for ctrl in (_DOCK_CONTROL, _WORKSPACE_CONTROL, _WC):
         try:
             if cmds.dockControl(ctrl, exists=True):
                 cmds.deleteUI(ctrl, control=True)
@@ -2140,9 +2168,9 @@ def _migrate_new_checks() -> None:
 
 
 def launch() -> StukachPanel:
-    """Open the STUKACH panel as a floating window anchored to the
-    top-right screen corner (user preference — dock hosting proved
-    unstable across reopen cycles)."""
+    """Open the STUKACH panel DOCKED to the right column of the main window
+    (left of the Attribute Editor), like the user's reference layout.
+    Falls back to the floating top-right window if docking fails."""
     global _panel_instance
     _ensure_command_port()
     _migrate_new_checks()
@@ -2153,6 +2181,11 @@ def launch() -> StukachPanel:
         except Exception:
             pass
         _panel_instance = None
+    try:
+        if cmds.workspaceControl(_WC, exists=True):
+            cmds.deleteUI(_WC)
+    except Exception:
+        pass
     _cleanup_dock_leftovers()
     # Hot-reload (shelf button) purges the modules, so _panel_instance may
     # point nowhere while old panels still exist — kill them by object name.
@@ -2167,6 +2200,22 @@ def launch() -> StukachPanel:
     except Exception:
         pass
 
+    # ── docked (default) ──
+    try:
+        ui_script = "import MAYA_STUKACH.ui as _u; _u._dock_builder('%s')" % _WC
+        cmds.workspaceControl(_WC, label="STUKACH", uiScript=ui_script)
+        cmds.workspaceControl(_WC, edit=True, restore=True)
+        cmds.workspaceControl(_WC, edit=True, dockToControl=("AttributeEditor", "left"))
+        cmds.workspaceControl(_WC, edit=True, width=dpi_scale(380))
+        if _panel_instance is not None:
+            _panel_instance.setWindowFlags(Qt.Widget)
+            _panel_instance.show()
+            _manager.alog("panel docked to AttributeEditor column")
+            return _panel_instance
+    except Exception as e:
+        _manager.alog("docking failed, floating fallback: %s" % e)
+
+    # ── floating fallback ──
     _panel_instance = StukachPanel(parent=_maya_main_window())
     # Qt.Tool: stays above the Maya window, no taskbar entry
     _panel_instance.setWindowFlags(Qt.Tool)
@@ -2192,6 +2241,11 @@ def launch() -> StukachPanel:
 
 def close() -> None:
     global _panel_instance
+    try:
+        if cmds.workspaceControl(_WC, exists=True):
+            cmds.deleteUI(_WC)
+    except Exception:
+        pass
     if _panel_instance is not None:
         _manager.MayaCheck.stop()
         try:
