@@ -1,6 +1,6 @@
 # STUKACH для Maya
 
-Пайплайн-валидатор ассетов для Autodesk Maya. 44 чекера в 8 категориях — топология, трансформации, симметрия, UV, нейминг, материалы, клинап — с пофрейсовым оверлеем во вьюпорте, фиксами в один клик и Qt-панелью, которая по умолчанию докится в интерфейс Maya.
+Пайплайн-валидатор ассетов для Autodesk Maya. 44 чекера в 7 категориях — топология, трансформации, симметрия, UV, нейминг, материалы, клинап — плюс проверка юнитов сцены, с пофрейсовым оверлеем во вьюпорте, фиксами в один клик и Qt-панелью, которая по умолчанию докится в интерфейс Maya.
 
 Часть системы **STUKACH — Pipeline Asset Validation System**. Blender-версия живёт в [abyrvalg379/STUKACH](https://github.com/abyrvalg379/STUKACH).
 
@@ -26,18 +26,20 @@
 
 Инсталлятор копирует пакет в `Documents/maya/2025/scripts/MAYA_STUKACH/`, плагин — в `Documents/maya/2025/plug-ins/`, и при необходимости ставит numpy/scipy в Maya Python.
 
-## Чекеры (36)
+## Чекеры (44)
 
-| Категория | Проверки |
-|---|---|
-| **Topology** | non-manifold, boundary edges, isolated verts, duplicate verts, face aspect ratio, triangles, n-gons, poles, zero-area faces, flipped normals, invalid normals, z-fighting |
-| **Transforms** | неприменённые трансформы, неравномерный скейл, construction history, пивот не в нуле, несхлопнутый стак модификаторов |
-| **Symmetry** | X / Y / Z (сравнение сеток через numpy) |
-| **UV** | единственный UV-сет, UDIM ready, UDIM bounds, материал на UDIM, UV overlap, UV micro-shell, UV stretch, texel density, UV padding |
-| **Naming** | нейминг объектов, нейминг коллекций, нумерация материалов |
-| **Materials** | суффикс материалов, назначение материалов, отсутствующие текстуры |
-| **Cleanup** | неиспользуемые данные |
-| **Scene** | юниты сцены |
+43 проверки в 7 категориях + **Scene Units** (уровень сцены, вне категорийного счёта).
+
+| Категория | # | Проверки |
+|---|---|---|
+| **Topology** | 14 | non-manifold, boundary edges, isolated verts, duplicate verts, face aspect ratio, triangles, n-gons, poles, zero-area faces, z-fighting, sharp edges not hard, lamina, zero-length edges, starlike |
+| **Transforms** | 6 | неприменённые трансформы, неравномерный скейл, construction history, пивот не в нуле, нецентрированные пивоты, parent geometry |
+| **Symmetry** | 3 | X / Y / Z (сравнение сеток через numpy) |
+| **UV** | 10 | единственный UV-сет, UDIM ready, UDIM bounds, материал на UDIM, UV overlap, UV micro-shell, UV stretch, texel density, UV padding, отсутствующие UV |
+| **Naming** | 6 | нейминг объектов, нейминг групп, нумерация материалов, дублирующиеся имена, имена шейпов, цифры в конце имени |
+| **Materials** | 3 | суффикс материалов, назначение материалов, отсутствующие текстуры |
+| **Cleanup** | 1 | неиспользуемые данные |
+| **Scene** | 1 | юниты сцены (линейная единица — метры) |
 
 ## Возможности
 
