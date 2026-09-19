@@ -6,6 +6,8 @@ Part of the **STUKACH — Pipeline Asset Validation System**. The Blender versio
 
 **Author:** Maksim Kovalev · **Version:** 1.1.1 · **License:** GPL-3.0
 
+*Документация на русском: [README.ru.md](README.ru.md)*
+
 ![STUKACH](icons/stukach_shelf_logo.png)
 
 ![STUKACH v1.1.0 docked in Maya](screenshots/panel_v1.1.0.png)
