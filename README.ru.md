@@ -20,7 +20,7 @@
 
 ## Установка (drag & drop)
 
-1. Скачайте `STUKACH_Maya_v1.1.1.zip` со страницы [Releases](https://github.com/abyrvalg379/STUKACH_Maya/releases) и распакуйте.
+1. Скачайте `STUKACH_Maya_v*.zip` со страницы [последнего релиза](https://github.com/abyrvalg379/STUKACH_Maya/releases/latest) и распакуйте.
 2. Перетащите `install_stukach.py` во вьюпорт Maya.
 3. На полке *Custom* появится кнопка **STUKACH** — клик открывает панель.
 

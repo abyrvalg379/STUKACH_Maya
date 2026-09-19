@@ -20,7 +20,7 @@ Part of the **STUKACH — Pipeline Asset Validation System**. The Blender versio
 
 ## Install (drag & drop)
 
-1. Download `STUKACH_Maya_v1.1.1.zip` from [Releases](https://github.com/abyrvalg379/STUKACH_Maya/releases) and unpack.
+1. Download `STUKACH_Maya_v*.zip` from the [latest release](https://github.com/abyrvalg379/STUKACH_Maya/releases/latest) and unpack.
 2. Drag & drop `install_stukach.py` into the Maya viewport.
 3. A **STUKACH** button appears on the *Custom* shelf — click it to open the panel.
 
