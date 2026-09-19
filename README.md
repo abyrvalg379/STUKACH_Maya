@@ -1,6 +1,6 @@
 # STUKACH for Maya
 
-Pipeline asset validator for Autodesk Maya. 44 checkers across 8 categories — topology, transforms, symmetry, UV, naming, materials, cleanup — with a per-face viewport overlay, one-click fixes, and a Qt panel that docks into Maya's UI by default.
+Pipeline asset validator for Autodesk Maya. 44 checkers across 7 categories — topology, transforms, symmetry, UV, naming, materials, cleanup — plus a scene-units check, with a per-face viewport overlay, one-click fixes, and a Qt panel that docks into Maya's UI by default.
 
 Part of the **STUKACH — Pipeline Asset Validation System**. The Blender version lives at [abyrvalg379/STUKACH](https://github.com/abyrvalg379/STUKACH).
 
@@ -26,18 +26,20 @@ Part of the **STUKACH — Pipeline Asset Validation System**. The Blender versio
 
 The installer copies the package to `Documents/maya/2025/scripts/MAYA_STUKACH/`, the plugin to `Documents/maya/2025/plug-ins/`, and installs numpy/scipy into the Maya Python if missing.
 
-## Checkers (36)
+## Checkers (44)
 
-| Category | Checks |
-|---|---|
-| **Topology** | non-manifold, boundary edges, isolated verts, duplicate verts, face aspect ratio, triangles, n-gons, poles, zero-area faces, flipped normals, invalid normals, z-fighting |
-| **Transforms** | non-applied transforms, non-uniform scale, construction history, origin not at zero, uncollapsed modifier stack |
-| **Symmetry** | X / Y / Z (numpy grid comparison) |
-| **UV** | single UV set, UDIM ready, UDIM bounds, material per UDIM, UV overlap, UV micro-shell, UV stretch, texel density, UV padding |
-| **Naming** | object naming, collection naming, material numbering |
-| **Materials** | material suffix, material assignment, missing textures |
-| **Cleanup** | unused data |
-| **Scene** | scene units |
+43 checks in 7 categories + **Scene Units** (scene-level, outside the category count).
+
+| Category | # | Checks |
+|---|---|---|
+| **Topology** | 14 | non-manifold, boundary edges, isolated verts, duplicate verts, face aspect ratio, triangles, n-gons, poles, zero-area faces, z-fighting, sharp edges not hard, lamina, zero-length edges, starlike |
+| **Transforms** | 6 | non-applied transforms, non-uniform scale, construction history, origin not at zero, uncentered pivots, parent geometry |
+| **Symmetry** | 3 | X / Y / Z (numpy grid comparison) |
+| **UV** | 10 | single UV set, UDIM ready, UDIM bounds, material per UDIM, UV overlap, UV micro-shell, UV stretch, texel density, UV padding, missing UVs |
+| **Naming** | 6 | object naming, group naming, material numbering, duplicated names, shape names, trailing numbers |
+| **Materials** | 3 | material suffix, material assignment, missing textures |
+| **Cleanup** | 1 | unused data |
+| **Scene** | 1 | scene units (linear unit must be meters) |
 
 ## Features
 
