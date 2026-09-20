@@ -8,7 +8,7 @@
 
 **Автор:** Maksim Kovalev · **Версия:** 1.1.1 · **Лицензия:** GPL-3.0
 
-![STUKACH](icons/stukach_shelf_logo.png)
+![STUKACH for Maya](screenshots/cover.png)
 
 ![STUKACH v1.1.0 docked in Maya](screenshots/panel_v1.1.0.png)
 
