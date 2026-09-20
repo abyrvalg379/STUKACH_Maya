@@ -8,7 +8,7 @@ Part of the **STUKACH — Pipeline Asset Validation System**. The Blender versio
 
 *Документация на русском: [README.ru.md](README.ru.md)*
 
-![STUKACH](icons/stukach_shelf_logo.png)
+![STUKACH for Maya](screenshots/cover.png)
 
 ![STUKACH v1.1.0 docked in Maya](screenshots/panel_v1.1.0.png)
 
