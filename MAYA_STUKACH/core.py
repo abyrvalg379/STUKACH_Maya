@@ -153,40 +153,6 @@ def _newell_normal(points, verts):
     return (nx, ny, nz)
 
 
-def _custom_normals_note(dag_path, bad_components, snap):
-    """Note for the row: the flagged zone carries LOCKED (custom) normals.
-
-    User insight: Weighted Normal & co make hard_edges-style findings
-    intentional shading, not errors — surface that in the report instead of
-    silently flagging. Sample-based (first flagged edges only), cheap."""
-    vert_ids = []
-    for comp in bad_components:
-        m = re.search(r"\.e\[(\d+)\]", comp)
-        if not m:
-            continue
-        e = int(m.group(1))
-        if e < len(snap.edges):
-            a, b = snap.edges[e]
-            for v in (a, b):
-                if v not in vert_ids:
-                    vert_ids.append(v)
-        if len(vert_ids) >= 24:
-            break
-    if not vert_ids:
-        return ""
-    try:
-        mesh = om.MFnMesh(dag_path)
-        for v in vert_ids:
-            comp_fn = om.MFnSingleIndexedComponent()
-            cobj = comp_fn.create(om.MFn.kMeshVertComponent)
-            comp_fn.addElement(v)
-            if mesh.isNormalLocked(cobj):
-                return "custom normals present - verify visually"
-    except Exception:
-        pass
-    return ""
-
-
 class Triangles(SnapshotCheck):
     severity = "WARNING"
 
@@ -1935,9 +1901,11 @@ class HardEdges(SnapshotCheck):
                 bad.append(snap.shape + ".e[%d]" % eid)
         self._count = len(bad)
         self._bad_components = bad
-        note = _custom_normals_note(self._last_dag_path, bad, snap)
-        if note:
-            self.note_text = note
+        # NOTE on custom (locked) normals — empirically (2026-09-23): Maya
+        # reports edges touching locked-normal verts as NOT smooth, so such
+        # edges never reach the flag above. hard_edges is naturally silent on
+        # custom-normal zones; no annotation is needed (the note candidate is
+        # closed). BaseCheck.note_text stays as a generic row-hint mechanism.
 
 
 class Lamina(SnapshotCheck):
