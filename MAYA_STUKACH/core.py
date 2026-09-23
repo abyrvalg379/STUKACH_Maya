@@ -35,6 +35,13 @@ def _get_shape(transform: str) -> Optional[str]:
 
 # ─── base ─────────────────────────────────────────────────────────────────────
 
+# Per-check cap on stored component strings. One hardsurf mesh can flag 300k+
+# edges (hard_edges on all-soft meshes) — the full list is memory plus freezes
+# in overlay serialization and selection math. Findings over the cap keep an
+# honest count and a sampled list for the overlay; Sel is off.
+BAD_COMPONENTS_CAP = 5000
+
+
 class BaseCheck(ABC):
     severity: str = "WARNING"   # "BLOCKER" | "WARNING" | "INFO"
 
@@ -43,6 +50,7 @@ class BaseCheck(ABC):
         self._bad_components: List[str] = []
         self.metric_text: str = ""
         self._ran: bool = False   # True after first successful run()
+        self._oversize: bool = False
 
     @property
     def count(self) -> int:
@@ -52,11 +60,34 @@ class BaseCheck(ABC):
     def bad_components(self) -> List[str]:
         return self._bad_components
 
+    @property
+    def oversize(self) -> bool:
+        return self._oversize
+
     @abstractmethod
     def run(self, dag_path: om.MDagPath) -> None:
         pass
 
+    def clamp_bad_components(self) -> None:
+        """Cap stored component strings on oversize findings.
+
+        _count stays honest; _bad_components keeps an evenly spread sample of
+        at most BAD_COMPONENTS_CAP strings so the overlay stays representat-
+        ive. Sel is off (ui hides the button, select() no-ops). Structured
+        fix targets ("attr:", "vgroup:") are never clamped — fixes iterate
+        them item by item."""
+        bad = self._bad_components
+        if len(bad) <= BAD_COMPONENTS_CAP:
+            return
+        if bad and bad[0].startswith(("attr:", "vgroup:")):
+            return
+        step = max(1, len(bad) // BAD_COMPONENTS_CAP)
+        self._bad_components = bad[::step][:BAD_COMPONENTS_CAP]
+        self._oversize = True
+
     def select(self) -> None:
+        if self._oversize:
+            return   # oversize: even the sample is too heavy to select
         if self._bad_components:
             cmds.select(self._bad_components, replace=True)
         else:
@@ -67,6 +98,7 @@ class BaseCheck(ABC):
         self._bad_components = []
         self.metric_text = ""
         self._ran = False
+        self._oversize = False
 
 
 # ─── TOPOLOGY ─────────────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 STUKACH for Maya — Qt panel, pixel-faithful replica of the Blender add-on UI.
 
 Layout (top to bottom, mirrors Blender's ASSET_CHECKER_PT_Panel v1.6.x):
-  STUKACH v1.1.1 / Pipeline Snitch System
+  STUKACH v1.1.2 / Pipeline Snitch System
   [ RUN STUKACH ]
   [ Coordinator Mode | Live ]
   score block: status line + health-strip + [Next Issue][Copy Summary]
@@ -776,8 +776,13 @@ class _DetailCheckRow(QtWidgets.QWidget):
         self.setVisible(True)
 
         mt = getattr(checker, "metric_text", "") or ""
-        text = mt if mt else "%s: %d" % (
-            _CHECK_DISPLAY_NAMES.get(self._key, self._key), count)
+        if getattr(checker, "oversize", False):
+            text = "%s: %d — %d sampled, Sel off" % (
+                _CHECK_DISPLAY_NAMES.get(self._key, self._key), count,
+                len(checker.bad_components))
+        else:
+            text = mt if mt else "%s: %d" % (
+                _CHECK_DISPLAY_NAMES.get(self._key, self._key), count)
         self.setToolTip(text)
 
         if ignored:
@@ -800,7 +805,9 @@ class _DetailCheckRow(QtWidgets.QWidget):
         self._label.setText(text)
         self._label.setStyleSheet("color: #d5d5d5; font-size: %dpx;"
                                   % max(1, _FONT_PX - 1))
-        self._sel_btn.setVisible(bool(checker.bad_components))
+        self._sel_btn.setVisible(
+            bool(checker.bad_components)
+            and not getattr(checker, "oversize", False))
         self._fix_btn.setVisible(self._key in _FIXABLE)
         return True
 
