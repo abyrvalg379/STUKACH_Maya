@@ -3,7 +3,7 @@
 STUKACH for Maya — Qt panel, pixel-faithful replica of the Blender add-on UI.
 
 Layout (top to bottom, mirrors Blender's ASSET_CHECKER_PT_Panel v1.6.x):
-  STUKACH v1.1.2 / Pipeline Snitch System
+  STUKACH v1.2.0 / Pipeline Snitch System
   [ RUN STUKACH ]
   [ Coordinator Mode | Live ]
   score block: status line + health-strip + [Next Issue][Copy Summary]
@@ -118,6 +118,16 @@ _C_RED      = "#ad4133"
 # Checks with an auto-fix operator (category Fix button + per-row Fix)
 _FIXABLE = frozenset({"non_applied_transform", "scale", "construction_history",
                       "non_manifold", "mat_suffix", "unused_data"})
+
+
+def _coordinator_lock() -> bool:
+    """Coordinator Lock (optionVar stukachCoordinatorLock) + Coordinator Mode:
+    the curator reviews and reports; fix actions are hidden."""
+    try:
+        return bool(_manager.MayaCheck.coordinator_mode
+                    and cmds.optionVar(query="stukachCoordinatorLock"))
+    except Exception:
+        return False
 
 _CHECK_SWATCH = {
     "triangles": "#B2B205", "ngons": "#B20505", "non_manifold": "#05FF05",
@@ -531,6 +541,7 @@ class _CategoryBox(QtWidgets.QFrame):
         btn.setFixedHeight(_BTN_H_SM)
         btn.setToolTip("Rename UV sets to the target name")
         btn.clicked.connect(self._on_uv_rename)
+        self._uv_rename_btn = btn   # visibility driven by Coordinator Lock
         lay.addWidget(btn)
         return w
 
@@ -680,7 +691,7 @@ class _CategoryBox(QtWidgets.QFrame):
             and any(mco.checkers.get(k) and mco.checkers[k].count > 0
                     for mco in _manager.MayaCheck.objects.values())
             for k in self._keys)
-        self._fix_btn.setVisible(cat_has_fix)
+        self._fix_btn.setVisible(cat_has_fix and not _coordinator_lock())
 
         coord = _manager.MayaCheck.coordinator_mode
         # Hide INFO rows in coordinator mode (Blender hides INFO entirely)
@@ -808,7 +819,8 @@ class _DetailCheckRow(QtWidgets.QWidget):
         self._sel_btn.setVisible(
             bool(checker.bad_components)
             and not getattr(checker, "oversize", False))
-        self._fix_btn.setVisible(self._key in _FIXABLE)
+        self._fix_btn.setVisible(self._key in _FIXABLE
+                                 and not _coordinator_lock())
         return True
 
     def _on_select(self) -> None:
@@ -1109,6 +1121,7 @@ class StukachPanel(QtWidgets.QWidget):
                            QtWidgets.QSizePolicy.Expanding)
         _manager.MayaCheck._ui_callback = self.refresh
         self._height_anim = None
+        self.refresh()   # initial sync: mode/stack/lock from live manager state
 
         # Live-mode tick (panel-owned so hot-reload kills it with the panel)
         # one timer drives BOTH progressive validation (150ms) and Live (1s)
@@ -1168,6 +1181,13 @@ class StukachPanel(QtWidgets.QWidget):
             "Live mode: revalidate dirty objects every second")
         self._mode_live_btn.clicked.connect(self._on_live_toggled)
         mode_row.addWidget(self._mode_live_btn, stretch=1)
+        self._opts_btn = QtWidgets.QPushButton("...")
+        self._opts_btn.setFixedHeight(_BTN_H)
+        self._opts_btn.setMaximumWidth(_px(36))
+        self._opts_btn.setToolTip(
+            "Workstation options: start mode, Coordinator Lock")
+        self._opts_btn.clicked.connect(self._on_options_menu)
+        mode_row.addWidget(self._opts_btn, stretch=0)
         root.addLayout(mode_row)
 
         self._stack = QtWidgets.QStackedWidget()
@@ -1684,6 +1704,27 @@ class StukachPanel(QtWidgets.QWidget):
     def _on_coordinator_toggled(self) -> None:
         _manager.MayaCheck.set_coordinator_mode(self._mode_coord_btn.isChecked())
 
+    def _on_options_menu(self) -> None:
+        menu = QtWidgets.QMenu(self._opts_btn)
+        a_start = menu.addAction("Start in Coordinator Mode")
+        a_start.setCheckable(True)
+        a_start.setChecked(bool(int(cmds.optionVar(
+            query="stukachStartCoordinator") or 0)))
+        a_lock = menu.addAction("Coordinator Lock (hide fixes)")
+        a_lock.setCheckable(True)
+        a_lock.setChecked(bool(cmds.optionVar(query="stukachCoordinatorLock")))
+        act = menu.exec_(self._opts_btn.mapToGlobal(
+            self._opts_btn.rect().bottomLeft()))
+        if act is a_start:
+            cmds.optionVar(iv=("stukachStartCoordinator",
+                               1 if a_start.isChecked() else 0))
+        elif act is a_lock:
+            if a_lock.isChecked():
+                cmds.optionVar(iv=("stukachCoordinatorLock", 1))
+            elif cmds.optionVar(exists="stukachCoordinatorLock"):
+                cmds.optionVar(remove="stukachCoordinatorLock")
+            _manager.MayaCheck._notify_ui()
+
     def _on_live_toggled(self) -> None:
         _manager.MayaCheck.set_live(self._mode_live_btn.isChecked())
 
@@ -1879,6 +1920,8 @@ class StukachPanel(QtWidgets.QWidget):
         self._mode_coord_btn.setText("Artist Mode" if coord else "Coordinator Mode")
         self._mode_coord_btn.blockSignals(False)
         self._stack.setCurrentIndex(1 if coord else 0)
+        if hasattr(self, "_uv_rename_btn"):
+            self._uv_rename_btn.setVisible(not _coordinator_lock())
         parent_layout = self._coord_checks_layout if coord else self._checks_layout
         if self._category_boxes:
             first = next(iter(self._category_boxes.values()))
@@ -2193,6 +2236,7 @@ def launch() -> StukachPanel:
     global _panel_instance
     _ensure_command_port()
     _migrate_new_checks()
+    _manager.MayaCheck.apply_startup_options()
     if _panel_instance is not None:
         try:
             _panel_instance.close()

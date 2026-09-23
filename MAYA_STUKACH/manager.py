@@ -26,7 +26,7 @@ from . import overlay as _overlay
 from .snapshot import build_snapshot, build_scene_ctx
 
 # Single source of truth for the panel header, reports and debug info.
-_VERSION = "1.1.2"
+_VERSION = "1.2.0"
 
 
 # ── session log (Blender parity: alog + ring buffer + %TEMP% file) ───────────
@@ -667,6 +667,16 @@ class MayaCheck:
     def set_coordinator_mode(cls, enabled: bool) -> None:
         cls.coordinator_mode = enabled
         cls._notify_ui()
+
+    @classmethod
+    def apply_startup_options(cls) -> None:
+        """Workstation flag from optionVars: a curator machine opens the
+        panel in Coordinator Mode. Called from ui.launch()."""
+        try:
+            if int(cmds.optionVar(query="stukachStartCoordinator") or 0):
+                cls.set_coordinator_mode(True)
+        except Exception:
+            pass
 
     # ── ignore list (Blender parity) ──────────────────────────────────────────
 
