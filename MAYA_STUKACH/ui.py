@@ -787,10 +787,14 @@ class _DetailCheckRow(QtWidgets.QWidget):
         self.setVisible(True)
 
         mt = getattr(checker, "metric_text", "") or ""
+        note = getattr(checker, "note_text", "") or ""
         if getattr(checker, "oversize", False):
             text = "%s: %d — %d sampled, Sel off" % (
                 _CHECK_DISPLAY_NAMES.get(self._key, self._key), count,
                 len(checker.bad_components))
+        elif note:
+            text = "%s: %d — %s" % (
+                _CHECK_DISPLAY_NAMES.get(self._key, self._key), count, note)
         else:
             text = mt if mt else "%s: %d" % (
                 _CHECK_DISPLAY_NAMES.get(self._key, self._key), count)

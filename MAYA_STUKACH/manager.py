@@ -578,8 +578,8 @@ class MayaCheck:
         cls._scene_ctx = build_scene_ctx(cls.objects)
         wanted = {k for k, en in cls._enabled_checks.items() if en}
         cls._wanted_flags = {
-            "want_area": "face_aspect_ratio" in wanted,
-            "want_lamina": "lamina" in wanted,
+            "want_area": "face_aspect_ratio" in wanted or "zero_area" in wanted,
+            "want_lamina": "lamina" in wanted or "non_manifold" in wanted,
             "want_starlike": "starlike" in wanted,
             "want_uvs": "missing_uvs" in wanted,
         }
