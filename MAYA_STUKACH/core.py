@@ -2156,6 +2156,21 @@ CHECK_SEVERITIES: dict = {
 
 # ─── scene-level check (not a BaseCheck — called directly from UI) ────────────
 
+def check_empty_groups() -> dict:
+    """Scene-level check: transforms with no children at all — the classic
+    empty groups left behind after rebuilds/imports. A transform holding any
+    shape (camera, locator, mesh) HAS children and is not flagged.
+
+    Returns {'groups': [long paths]} — the UI lists/selects them; deletion
+    stays manual (mass deletes are the user's call, never automatic).
+    """
+    groups = []
+    for t in (cmds.ls(type="transform", long=True) or []):
+        if not (cmds.listRelatives(t, children=True) or []):
+            groups.append(t)
+    return {"groups": groups}
+
+
 def check_scene_units() -> dict:
     """Scene-level check: linear unit must be meters.
 

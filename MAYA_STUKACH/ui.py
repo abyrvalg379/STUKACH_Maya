@@ -1331,8 +1331,10 @@ class StukachPanel(QtWidgets.QWidget):
         batch_row.addWidget(self._overlay_cb)
         root.addLayout(batch_row)
 
-        # ── scene units row ──
+        # ── scene-level rows (Scene Units + Empty Groups) ──
         self._units_rows = []
+        self._eg_rows = []
+        self._eg_groups = []
         root.addWidget(self._build_units_row())
 
         # ── scroll: Pipeline Checks + Objects ──
@@ -1422,12 +1424,15 @@ class StukachPanel(QtWidgets.QWidget):
         verdict_layout.addWidget(self._verdict_subtext)
         root.addWidget(self._verdict_widget)
 
-    def _build_units_row(self) -> QtWidgets.QHBoxLayout:
-        """Scene Units check + status label, wrapped in a bordered box."""
+    def _build_units_row(self) -> QtWidgets.QFrame:
+        """Scene-level checks (Scene Units + Empty Groups), bordered box."""
         box = QtWidgets.QFrame()
         box.setObjectName("catBox")
-        units_row = QtWidgets.QHBoxLayout(box)
-        units_row.setContentsMargins(_px(6), _px(3), _px(6), _px(3))
+        outer = QtWidgets.QVBoxLayout(box)
+        outer.setContentsMargins(_px(6), _px(3), _px(6), _px(3))
+        outer.setSpacing(_px(2))
+
+        units_row = QtWidgets.QHBoxLayout()
         units_row.setSpacing(_px(4))
         toggle = QtWidgets.QCheckBox("Scene Units")
         toggle.setToolTip("Check scene units: METRIC · m · scale 1.0")
@@ -1439,6 +1444,30 @@ class StukachPanel(QtWidgets.QWidget):
             "color: #909090; font-size: %dpx;" % max(1, _FONT_PX - 1))
         units_row.addWidget(status)
         self._units_rows.append((toggle, status))
+        outer.addLayout(units_row)
+
+        # Empty Groups — scene-level clutter scan (transforms with no children)
+        eg_row = QtWidgets.QHBoxLayout()
+        eg_row.setSpacing(_px(4))
+        eg_toggle = QtWidgets.QCheckBox("Empty Groups")
+        eg_toggle.setToolTip(
+            "Scene-level check: transforms with no children (empty groups "
+            "left after rebuilds/imports). Select and delete manually.")
+        eg_toggle.stateChanged.connect(self._on_empty_groups_toggled)
+        eg_row.addWidget(eg_toggle)
+        eg_row.addStretch()
+        eg_status = QtWidgets.QLabel("")
+        eg_status.setStyleSheet(
+            "color: #909090; font-size: %dpx;" % max(1, _FONT_PX - 1))
+        eg_row.addWidget(eg_status)
+        eg_sel = QtWidgets.QPushButton("Sel")
+        eg_sel.setFixedHeight(_BTN_H_XS)
+        eg_sel.setToolTip("Select the empty groups (deletion stays manual)")
+        eg_sel.clicked.connect(self._on_empty_groups_sel)
+        eg_row.addWidget(eg_sel)
+        self._eg_rows.append((eg_toggle, eg_status))
+        outer.addLayout(eg_row)
+
         return box
 
     def _build_objects_section(self, cont_layout: QtWidgets.QVBoxLayout) -> None:
@@ -1748,6 +1777,37 @@ class StukachPanel(QtWidgets.QWidget):
 
     def _on_units_toggled(self, state: int) -> None:
         self._update_scene_units(int(state) == 2)
+
+    def _on_empty_groups_toggled(self, state: int) -> None:
+        self._update_empty_groups(int(state) == 2)
+
+    def _update_empty_groups(self, enabled: bool) -> None:
+        if not enabled:
+            self._eg_groups = []
+            for _toggle, status in self._eg_rows:
+                status.setText("")
+            return
+        try:
+            res = _core.check_empty_groups()
+        except Exception:
+            for _toggle, status in self._eg_rows:
+                status.setText("?")
+            return
+        self._eg_groups = res.get("groups", [])
+        n = len(self._eg_groups)
+        for _toggle, status in self._eg_rows:
+            if n:
+                status.setText("%d empty group%s" % (n, "s" if n != 1 else ""))
+                status.setStyleSheet(
+                    "color: #b0a060; font-size: %dpx;" % max(1, _FONT_PX - 1))
+            else:
+                status.setText("clean")
+                status.setStyleSheet(
+                    "color: #477a3c; font-size: %dpx;" % max(1, _FONT_PX - 1))
+
+    def _on_empty_groups_sel(self) -> None:
+        if self._eg_groups:
+            cmds.select(self._eg_groups, replace=True)
 
     def _on_next_issue(self) -> None:
         target = _manager.MayaCheck.next_issue()
