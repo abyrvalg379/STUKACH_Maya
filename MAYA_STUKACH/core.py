@@ -49,6 +49,7 @@ class BaseCheck(ABC):
         self._count: int = 0
         self._bad_components: List[str] = []
         self.metric_text: str = ""
+        self.note_text: str = ""   # extra row hint (e.g. custom normals) — count stays visible
         self._ran: bool = False   # True after first successful run()
         self._oversize: bool = False
 
@@ -97,6 +98,7 @@ class BaseCheck(ABC):
         self._count = 0
         self._bad_components = []
         self.metric_text = ""
+        self.note_text = ""
         self._ran = False
         self._oversize = False
 
@@ -115,233 +117,218 @@ def _get_mesh_fn(dag_path: om.MDagPath) -> om.MFnMesh:
     return om.MFnMesh(_shape_dag(dag_path))
 
 
-class Triangles(BaseCheck):
+# ── snapshot engine base + shared helpers ────────────────────────────────────
+# (moved above the migrated checks: they are SnapshotCheck subclasses)
+
+class SnapshotCheck(BaseCheck):
+    """Base for checks that run against a MeshSnapshot (one mesh traversal
+    feeds every enabled check — see snapshot.build_snapshot)."""
+
+    def __init__(self):
+        super().__init__()
+        self._last_dag_path = None
+
+    def run(self, dag_path, ctx=None):
+        snap = ctx.get("snapshot") if ctx else None
+        if snap is None:
+            return
+        self.reset()
+        self._last_dag_path = dag_path
+        self.run_snapshot(snap)
+
+    def run_snapshot(self, snap):
+        raise NotImplementedError
+
+
+def _newell_normal(points, verts):
+    """Newell's method face normal — robust for concave/n-gon faces."""
+    nx = ny = nz = 0.0
+    n = len(verts)
+    for i in range(n):
+        a = points[verts[i]]
+        b = points[verts[(i + 1) % n]]
+        nx += (a[1] - b[1]) * (a[2] + b[2])
+        ny += (a[2] - b[2]) * (a[0] + b[0])
+        nz += (a[0] - b[0]) * (a[1] + b[1])
+    return (nx, ny, nz)
+
+
+def _custom_normals_note(dag_path, bad_components, snap):
+    """Note for the row: the flagged zone carries LOCKED (custom) normals.
+
+    User insight: Weighted Normal & co make hard_edges-style findings
+    intentional shading, not errors — surface that in the report instead of
+    silently flagging. Sample-based (first flagged edges only), cheap."""
+    vert_ids = []
+    for comp in bad_components:
+        m = re.search(r"\.e\[(\d+)\]", comp)
+        if not m:
+            continue
+        e = int(m.group(1))
+        if e < len(snap.edges):
+            a, b = snap.edges[e]
+            for v in (a, b):
+                if v not in vert_ids:
+                    vert_ids.append(v)
+        if len(vert_ids) >= 24:
+            break
+    if not vert_ids:
+        return ""
+    try:
+        mesh = om.MFnMesh(dag_path)
+        for v in vert_ids:
+            comp_fn = om.MFnSingleIndexedComponent()
+            cobj = comp_fn.create(om.MFn.kMeshVertComponent)
+            comp_fn.addElement(v)
+            if mesh.isNormalLocked(cobj):
+                return "custom normals present - verify visually"
+    except Exception:
+        pass
+    return ""
+
+
+class Triangles(SnapshotCheck):
     severity = "WARNING"
 
-    def run(self, dag_path: om.MDagPath) -> None:
-        self.reset()
-        sdp = _shape_dag(dag_path)
-        mesh = om.MFnMesh(sdp)
-        shape = mesh.fullPathName()
-        it = om.MItMeshPolygon(sdp)
-        bad = []
-        while not it.isDone():
-            if it.polygonVertexCount() == 3:
-                bad.append(f"{shape}.f[{it.index()}]")
-            it.next()
+    def run_snapshot(self, snap):
+        bad = [snap.shape + ".f[%d]" % fi
+               for fi, verts in enumerate(snap.face_verts) if len(verts) == 3]
         self._count = len(bad)
         self._bad_components = bad
 
 
-class Ngons(BaseCheck):
+class Ngons(SnapshotCheck):
     severity = "BLOCKER"
 
-    def run(self, dag_path: om.MDagPath) -> None:
-        self.reset()
-        sdp = _shape_dag(dag_path)
-        mesh = om.MFnMesh(sdp)
-        shape = mesh.fullPathName()
-        it = om.MItMeshPolygon(sdp)
-        bad = []
-        while not it.isDone():
-            if it.polygonVertexCount() > 4:
-                bad.append(f"{shape}.f[{it.index()}]")
-            it.next()
+    def run_snapshot(self, snap):
+        bad = [snap.shape + ".f[%d]" % fi
+               for fi, verts in enumerate(snap.face_verts) if len(verts) > 4]
         self._count = len(bad)
         self._bad_components = bad
 
 
-def _find_isolated_verts(sdp: om.MDagPath, shape: str) -> List[str]:
-    """Return list of vtx[n] component strings for vertices with 0 connected edges."""
-    bad = []
-    it = om.MItMeshVertex(sdp)
-    while not it.isDone():
-        if it.numConnectedEdges() == 0:
-            bad.append(f"{shape}.vtx[{it.index()}]")
-        it.next()
-    return bad
-
-
-class NonManifold(BaseCheck):
+class NonManifold(SnapshotCheck):
     severity = "BLOCKER"
 
-    def run(self, dag_path: om.MDagPath) -> None:
-        self.reset()
-        sdp = _shape_dag(dag_path)
-        mesh = om.MFnMesh(sdp)
-        shape = mesh.fullPathName()
-
-        bad_edges = []
-        bad_faces = []
-        bad_verts = []
+    def run_snapshot(self, snap):
+        ve = snap.vert_edges()
+        vf = snap.vert_faces()
+        ef = snap.edge_faces()
 
         # 1) Non-manifold edges: shared by more than 2 faces
-        it_edge = om.MItMeshEdge(sdp)
-        while not it_edge.isDone():
-            if len(it_edge.getConnectedFaces()) > 2:
-                bad_edges.append(f"{shape}.e[{it_edge.index()}]")
-            it_edge.next()
+        bad_edges = []
+        for eid, conn in enumerate(snap.edge_conn):
+            if conn > 2:
+                bad_edges.append(snap.shape + ".e[%d]" % eid)
 
-        # 2) Non-contiguous vertex fans: a vertex where connected faces
-        #    don't form a single continuous fan around it.  This catches
-        #    the classic "two mesh islands sharing one vertex" topology
-        #    that Blender's Select Non-Manifold reports but our edge-only
-        #    check misses.
-        #
-        #    Algorithm: for each vertex with >0 faces, walk the face fan
-        #    by following edges that connect to the vertex.  If the walk
-        #    visits fewer faces than the vertex has, the fan is split.
-        it_vtx = om.MItMeshVertex(sdp)
-        while not it_vtx.isDone():
-            n_faces = it_vtx.numConnectedFaces()
-            n_edges = it_vtx.numConnectedEdges()
-            if n_faces > 1 and n_edges > 1:
-                # Get all faces connected to this vertex
-                connected_faces = it_vtx.getConnectedFaces()
-                # Get all edges connected to this vertex
-                connected_edges = it_vtx.getConnectedEdges()
-
-                # Build adjacency: for each face, which other faces share
-                # an edge that touches this vertex?
-                face_to_faces = {}  # face_id -> set of adjacent face_ids
-                for fi in connected_faces:
-                    face_to_faces[fi] = set()
-
-                for ei in connected_edges:
-                    edge_it = om.MItMeshEdge(sdp)
-                    edge_it.setIndex(ei)
-                    edge_faces = edge_it.getConnectedFaces()
-                    # Only consider faces that are also connected to our vertex
-                    edge_faces_vtx = [f for f in edge_faces if f in face_to_faces]
-                    for i in range(len(edge_faces_vtx)):
-                        for j in range(i + 1, len(edge_faces_vtx)):
-                            face_to_faces[edge_faces_vtx[i]].add(edge_faces_vtx[j])
-                            face_to_faces[edge_faces_vtx[j]].add(edge_faces_vtx[i])
-
-                # BFS from the first face
-                visited = set()
-                queue = [connected_faces[0]]
-                visited.add(connected_faces[0])
+        # 2) Non-contiguous vertex fans: faces around a vertex must form one
+        #    continuous fan — walk it via shared edges. A split fan catches
+        #    "two mesh islands sharing one vertex" (Blender's Select
+        #    Non-Manifold parity).
+        bad_verts = []
+        for v, f_ids in vf.items():
+            e_ids = ve.get(v, ())
+            if len(f_ids) > 1 and len(e_ids) > 1:
+                fset = set(f_ids)
+                adj = {}
+                for f in f_ids:
+                    adj[f] = set()
+                for e in e_ids:
+                    shared = [f for f in ef.get(e, ()) if f in fset]
+                    for i in range(len(shared)):
+                        for j in range(i + 1, len(shared)):
+                            adj[shared[i]].add(shared[j])
+                            adj[shared[j]].add(shared[i])
+                visited = {f_ids[0]}
+                queue = [f_ids[0]]
                 while queue:
-                    current = queue.pop(0)
-                    for neighbor in face_to_faces.get(current, set()):
-                        if neighbor not in visited:
-                            visited.add(neighbor)
-                            queue.append(neighbor)
+                    cur = queue.pop()
+                    for nb in adj[cur]:
+                        if nb not in visited:
+                            visited.add(nb)
+                            queue.append(nb)
+                if len(visited) < len(f_ids):
+                    bad_verts.append(v)
 
-                if len(visited) < n_faces:
-                    bad_verts.append(f"{shape}.vtx[{it_vtx.index()}]")
-            it_vtx.next()
+        # 3) Lamina faces (duplicate/overlapping) — same data the Lamina
+        #    check uses; want_lamina covers non_manifold too (see manager).
+        bad_faces = [snap.shape + ".f[%d]" % fi
+                     for fi, is_lam in enumerate(snap.face_lamina) if is_lam]
 
-        # 3) Lamina faces: two faces occupying the exact same space
-        #    (duplicate/overlapping faces).  Created when an internal polygon
-        #    is built between existing edges in Blender and imported.
-        #    Maya's polyInfo detects these natively.
-        try:
-            lamina = cmds.polyInfo(mesh.fullPathName(), laminaFaces=True) or []
-            for entry in lamina:
-                import re as _re
-                for m in _re.finditer(r'(\d+)', entry):
-                    bad_faces.append(f"{shape}.f[{m.group(1)}]")
-        except Exception:
-            pass
+        # 4) Isolated vertices (0 connected edges): verts referenced by
+        #    nothing (not in any face, not in any edge)
+        referenced = set(ve.keys()) | set(vf.keys())
+        iso = [v for v in range(len(snap.points)) if v not in referenced]
 
-        # 4) Isolated vertices (0 connected edges)
-        bad_verts.extend(_find_isolated_verts(sdp, shape))
-        # deduplicate
-        bad_verts = list(dict.fromkeys(bad_verts))
-
+        bad_verts = list(dict.fromkeys(bad_verts + iso))
         self._bad_components = bad_edges + bad_faces + bad_verts
         self._count = len(bad_edges) + len(bad_faces) + len(bad_verts)
         parts = []
         if bad_edges:
-            parts.append(f"{len(bad_edges)} edges")
+            parts.append("%d edges" % len(bad_edges))
         if bad_faces:
-            parts.append(f"{len(bad_faces)} lamina")
+            parts.append("%d lamina" % len(bad_faces))
         if bad_verts:
-            parts.append(f"{len(bad_verts)} verts")
+            parts.append("%d verts" % len(bad_verts))
         if parts:
             self.metric_text = " + ".join(parts)
 
 
-class ZeroArea(BaseCheck):
+class ZeroArea(SnapshotCheck):
     severity = "BLOCKER"
     _THRESHOLD = 1e-10
 
-    def run(self, dag_path: om.MDagPath) -> None:
-        self.reset()
-        sdp = _shape_dag(dag_path)
-        mesh = om.MFnMesh(sdp)
-        shape = mesh.fullPathName()
-        it = om.MItMeshPolygon(sdp)
-        bad = []
-        while not it.isDone():
-            if it.getArea() < self._THRESHOLD:
-                bad.append(f"{shape}.f[{it.index()}]")
-            it.next()
+    def run_snapshot(self, snap):
+        bad = [snap.shape + ".f[%d]" % fi
+               for fi, area in enumerate(snap.face_area) if area < self._THRESHOLD]
         self._count = len(bad)
         self._bad_components = bad
 
 
-class Poles(BaseCheck):
+class Poles(SnapshotCheck):
     """N-poles (3 edges) and E-poles (5+ edges)."""
     severity = "INFO"
 
-    def run(self, dag_path: om.MDagPath) -> None:
-        self.reset()
-        sdp = _shape_dag(dag_path)
-        mesh = om.MFnMesh(sdp)
-        shape = mesh.fullPathName()
-        it = om.MItMeshVertex(sdp)
+    def run_snapshot(self, snap):
         n_poles = e_poles = more_poles = 0
         bad = []
-        while not it.isDone():
-            ne = it.numConnectedEdges()
+        for v, e_ids in snap.vert_edges().items():
+            ne = len(e_ids)
             if ne == 3:
                 n_poles += 1
-                bad.append(f"{shape}.vtx[{it.index()}]")
+                bad.append(snap.shape + ".vtx[%d]" % v)
             elif ne == 5:
                 e_poles += 1
-                bad.append(f"{shape}.vtx[{it.index()}]")
+                bad.append(snap.shape + ".vtx[%d]" % v)
             elif ne > 5:
                 more_poles += 1
-                bad.append(f"{shape}.vtx[{it.index()}]")
-            it.next()
+                bad.append(snap.shape + ".vtx[%d]" % v)
         self._count = len(bad)
         self._bad_components = bad
         parts = []
-        if n_poles:   parts.append(f"{n_poles}N")
-        if e_poles:   parts.append(f"{e_poles}E")
-        if more_poles: parts.append(f"{more_poles}+")
+        if n_poles:   parts.append("%dN" % n_poles)
+        if e_poles:   parts.append("%dE" % e_poles)
+        if more_poles: parts.append("%d+" % more_poles)
         self.metric_text = " ".join(parts)
 
 
-class IsolatedVerts(BaseCheck):
+class IsolatedVerts(SnapshotCheck):
     severity = "WARNING"
 
-    def run(self, dag_path: om.MDagPath) -> None:
-        self.reset()
-        sdp = _shape_dag(dag_path)
-        shape = om.MFnMesh(sdp).fullPathName()
-        bad = _find_isolated_verts(sdp, shape)
+    def run_snapshot(self, snap):
+        referenced = set(snap.vert_edges().keys()) | set(snap.vert_faces().keys())
+        bad = [snap.shape + ".vtx[%d]" % v
+               for v in range(len(snap.points)) if v not in referenced]
         self._count = len(bad)
         self._bad_components = bad
 
 
-class BoundaryEdges(BaseCheck):
+class BoundaryEdges(SnapshotCheck):
     severity = "WARNING"
 
-    def run(self, dag_path: om.MDagPath) -> None:
-        self.reset()
-        sdp = _shape_dag(dag_path)
-        mesh = om.MFnMesh(sdp)
-        shape = mesh.fullPathName()
-        it = om.MItMeshEdge(sdp)
-        bad = []
-        while not it.isDone():
-            if len(it.getConnectedFaces()) == 1:
-                bad.append(f"{shape}.e[{it.index()}]")
-            it.next()
+    def run_snapshot(self, snap):
+        bad = [snap.shape + ".e[%d]" % eid
+               for eid, conn in enumerate(snap.edge_conn) if conn == 1]
         self._count = len(bad)
         self._bad_components = bad
 
@@ -779,116 +766,76 @@ class MatAssignment(BaseCheck):
 
 # ─── TOPOLOGY: duplicate_verts ───────────────────────────────────────────────
 
-class DuplicateVerts(BaseCheck):
+class DuplicateVerts(SnapshotCheck):
     """Overlapping vertices within 0.01 mm — would merge on Merge by Distance.
 
-    Uses scipy.spatial.cKDTree (the Maya equivalent of bmesh.ops.find_doubles).
-    A vertex is flagged when another vertex sits within _MERGE_DIST of it.
-    """
+    scipy.spatial.cKDTree over the snapshot points (the Maya equivalent of
+    bmesh.ops.find_doubles). A vertex is flagged when another vertex sits
+    within _MERGE_DIST of it."""
     severity = "BLOCKER"
     _MERGE_DIST = 1e-5   # 0.01 mm — only truly coincident verts
 
-    def run(self, dag_path: om.MDagPath) -> None:
-        self.reset()
-        sdp = _shape_dag(dag_path)
-        mesh = om.MFnMesh(sdp)
-        shape = mesh.fullPathName()
-        n = mesh.numVertices
+    def run_snapshot(self, snap):
+        n = len(snap.points)
         if n < 2:
             return
         try:
             from scipy.spatial import cKDTree
         except ImportError:
-            self.metric_text = "scipy not installed — install via: mayapy -m pip install scipy"
+            self.metric_text = "scipy not installed - install via: mayapy -m pip install scipy"
             return
-
-        pts = mesh.getPoints(om.MSpace.kObject)
-        # numpy vectorized: MPointArray → (n,3) float64, filter NaN/inf
-        try:
-            import numpy as np
-            co_all = np.array([(p.x, p.y, p.z) for p in pts], dtype=np.float64)
-        except ImportError:
-            # Fallback to Python loop if numpy unavailable
-            co_all = None
-        if co_all is not None:
-            finite = np.isfinite(co_all).all(axis=1)
-            reasonable = (np.abs(co_all) < 1e8).all(axis=1)
-            mask = finite & reasonable
-            valid_idx = np.where(mask)[0]
-            co = co_all[mask]
-        else:
-            co = []
-            valid_idx = []
-            for i in range(n):
-                x, y, z = pts[i].x, pts[i].y, pts[i].z
-                if x != x or y != y or z != z:
-                    continue
-                if abs(x) > 1e8 or abs(y) > 1e8 or abs(z) > 1e8:
-                    continue
-                co.append((x, y, z))
-                valid_idx.append(i)
+        import numpy as np
+        co_all = np.array(snap.points, dtype=np.float64)
+        finite = np.isfinite(co_all).all(axis=1)
+        reasonable = (np.abs(co_all) < 1e8).all(axis=1)
+        mask = finite & reasonable
+        valid_idx = np.where(mask)[0]
+        co = co_all[mask]
         if len(co) < 2:
             return
         tree = cKDTree(co)
-        # query_pairs returns unordered pairs (i, j) with i < j within the radius.
-        # Indices here are into `co` (NaN verts excluded); map back to mesh verts.
         pairs = tree.query_pairs(r=self._MERGE_DIST, output_type='ndarray')
         if len(pairs) == 0:
             return
-        # Both verts of each pair are duplicates — collect unique mesh-vertex ids
-        if co_all is not None:
-            import numpy as np
-            dup_local = np.unique(pairs.ravel())
-            dup_mesh = np.sort(valid_idx[dup_local])
-            self._bad_components = [f"{shape}.vtx[{int(i)}]" for i in dup_mesh]
-        else:
-            dup_idx = set()
-            for i, j in pairs:
-                dup_idx.add(valid_idx[int(i)])
-                dup_idx.add(valid_idx[int(j)])
-            self._bad_components = [f"{shape}.vtx[{i}]" for i in sorted(dup_idx)]
+        dup_local = np.unique(pairs.ravel())
+        dup_mesh = np.sort(valid_idx[dup_local])
+        self._bad_components = [snap.shape + ".vtx[%d]" % int(i) for i in dup_mesh]
         self._count = len(self._bad_components)
 
 
 # ─── TOPOLOGY: face_aspect_ratio ─────────────────────────────────────────────
 
-class FaceAspectRatio(BaseCheck):
+class FaceAspectRatio(SnapshotCheck):
     """Quad faces whose aspect ratio exceeds the threshold.
 
-    Aspect ratio = max(avg_longer_pair, avg_shorter_pair) / min(...) for the two
-    pairs of opposite edges in a quad.  Only quads are checked; tris/ngons skip.
-    """
+    Aspect ratio = max(avg_longer_pair, avg_shorter_pair) / min(...) for the
+    two pairs of opposite edges in a quad.  Only quads are checked; tris/ngons
+    skip."""
     severity = "INFO"
     _DEFAULT_THRESHOLD = 6.0
 
-    def run(self, dag_path: om.MDagPath) -> None:
-        self.reset()
-        sdp = _shape_dag(dag_path)
-        shape = sdp.fullPathName()
-        it = om.MItMeshPolygon(sdp)
+    def run_snapshot(self, snap):
+        pts = snap.points
         bad = []
         threshold = self._DEFAULT_THRESHOLD
-        while not it.isDone():
-            if it.polygonVertexCount() != 4:
-                it.next(); continue
-            pts = it.getPoints(om.MSpace.kObject)   # MPointArray of the 4 corners
-            # 4 edges: (0,1)(1,2)(2,3)(3,0); opposite pairs: (e0,e2) and (e1,e3)
-            def edge_len(a, b):
-                return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2)
-            e0 = edge_len(pts[0], pts[1])
-            e1 = edge_len(pts[1], pts[2])
-            e2 = edge_len(pts[2], pts[3])
-            e3 = edge_len(pts[3], pts[0])
+        for fi, verts in enumerate(snap.face_verts):
+            if len(verts) != 4:
+                continue
+            a, b, c, d = (pts[v] for v in verts)
+            e0 = math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2)
+            e1 = math.sqrt((b[0]-c[0])**2 + (b[1]-c[1])**2 + (b[2]-c[2])**2)
+            e2 = math.sqrt((c[0]-d[0])**2 + (c[1]-d[1])**2 + (c[2]-d[2])**2)
+            e3 = math.sqrt((d[0]-a[0])**2 + (d[1]-a[1])**2 + (d[2]-a[2])**2)
             avg_a = (e0 + e2) * 0.5
             avg_b = (e1 + e3) * 0.5
             if avg_a < 1e-10 or avg_b < 1e-10:
-                it.next(); continue
+                continue
             ratio = avg_a / avg_b if avg_a > avg_b else avg_b / avg_a
             if ratio > threshold:
-                bad.append(f"{shape}.f[{it.index()}]")
-            it.next()
+                bad.append(snap.shape + ".f[%d]" % fi)
         self._bad_components = bad
         self._count = len(bad)
+
 
 
 # (flipped_normals / invalid_normals removed — Blender dropped both as
@@ -896,34 +843,23 @@ class FaceAspectRatio(BaseCheck):
 
 # ─── SYMMETRY ─────────────────────────────────────────────────────────────────
 
-class SymmetryCheck(BaseCheck):
+class SymmetryCheck(SnapshotCheck):
     """Mesh symmetry check along an axis.
 
     Mirrors the Blender numpy algorithm exactly: round coords to an int grid,
     pack (gx,gy,gz) into one int64, binary-search for each mirrored key in the
     sorted set. A vertex is asymmetric if its mirror key is absent.
-    Threshold 0.001 (1 mm grid). Severity INFO.
-    """
+    Threshold 0.001 (1 mm grid). Severity INFO."""
     severity = "INFO"
     _AXIS: int = 0
     _THRESHOLD: float = 0.001
 
-    def run(self, dag_path: om.MDagPath) -> None:
-        self.reset()
-        sdp = _shape_dag(dag_path)
-        mesh = om.MFnMesh(sdp)
-        shape = mesh.fullPathName()
-        n = mesh.numVertices
+    def run_snapshot(self, snap):
+        import numpy as np
+        n = len(snap.points)
         if n == 0:
             return
-        import numpy as np
-        pts = mesh.getPoints(om.MSpace.kObject)
-        co_np = np.empty(n * 3, dtype=np.float64)
-        for i in range(n):
-            co_np[i * 3] = pts[i].x
-            co_np[i * 3 + 1] = pts[i].y
-            co_np[i * 3 + 2] = pts[i].z
-        co_np = co_np.reshape(n, 3)
+        co_np = np.array(snap.points, dtype=np.float64).reshape(n, 3)
 
         thr = self._THRESHOLD
         axis = self._AXIS
@@ -947,7 +883,7 @@ class SymmetryCheck(BaseCheck):
         asym_mask = packed_sorted[idx] != m_packed
 
         asym_idx = list(np.where(asym_mask)[0].tolist())
-        self._bad_components = [f"{shape}.vtx[{i}]" for i in asym_idx]
+        self._bad_components = [snap.shape + ".vtx[%d]" % i for i in asym_idx]
         self._count = len(asym_idx)
 
 
@@ -1738,39 +1674,40 @@ _Z_FIGHT_NORMAL_DOT = 0.99     # coplanar threshold (signed dot product)
 _Z_FIGHT_CENTROID_DIST = 0.001  # 1mm world-space centroid distance
 
 
-class ZFighting(BaseCheck):
-    """Detect coplanar overlapping faces — intra-object and inter-object.
+class ZFighting(SnapshotCheck):
+    """Detect coplanar overlapping faces — intra-object.
 
-    Ported from Blender's ZFighting checker. Uses spatial hash + normal +
-    adjacency + centroid filters to eliminate false positives.
-    """
+    Ported from Blender's ZFighting checker: spatial hash + normal +
+    adjacency + centroid filters to eliminate false positives. Centroids are
+    hashed in WORLD space (like the old iterator version, via the snapshot's
+    world matrix); normals are Newell's from object-space snapshot points."""
     severity = "BLOCKER"
 
-    def run(self, dag_path: om.MDagPath) -> None:
-        self.reset()
-        sdp = _shape_dag(dag_path)
-        mesh = om.MFnMesh(sdp)
-        shape = mesh.fullPathName()
-        n_faces = mesh.numPolygons
+    def run_snapshot(self, snap):
+        n_faces = len(snap.face_verts)
         if n_faces < 2 or n_faces > _Z_FIGHT_MAX_FACES_INTRA:
             return
+        m = snap.world_matrix
 
-        # Collect per-face data: centroid + normal (via MItMeshPolygon)
+        def to_world(p):
+            x, y, z = p
+            return (m[0] * x + m[4] * y + m[8] * z + m[12],
+                    m[1] * x + m[5] * y + m[9] * z + m[13],
+                    m[2] * x + m[6] * y + m[10] * z + m[14])
+
         centroids = []
         normals = []
-        it = om.MItMeshPolygon(sdp)
-        while not it.isDone():
-            fi = it.index()
-            c = it.center(om.MSpace.kWorld)
-            centroids.append((c[0], c[1], c[2]))
-            n = it.getNormal(om.MSpace.kObject)
-            normals.append((n[0], n[1], n[2]))
-            it.next()
+        for verts in snap.face_verts:
+            cx = cy = cz = 0.0
+            for v in verts:
+                p = snap.points[v]
+                cx += p[0]; cy += p[1]; cz += p[2]
+            centroids.append(to_world((cx / len(verts), cy / len(verts),
+                                       cz / len(verts))))
+            normals.append(_newell_normal(snap.points, verts))
 
-        # Build adjacency: face → set of vertex indices
-        face_verts = [set(int(v) for v in mesh.getPolygonVertices(fi)) for fi in range(n_faces)]
+        face_vsets = [set(verts) for verts in snap.face_verts]
 
-        # Build spatial hash (grid-based broad phase)
         from collections import defaultdict
         cell_size = 0.05  # 5cm grid
         grid = defaultdict(list)
@@ -1778,17 +1715,15 @@ class ZFighting(BaseCheck):
             key = (int(cx / cell_size), int(cy / cell_size), int(cz / cell_size))
             grid[key].append(fi)
 
-        # Check pairs within same + adjacent cells
         thr_sq = _Z_FIGHT_CENTROID_DIST ** 2
         bad = set()
         checked = set()
         for (gx, gy, gz), faces_in_cell in grid.items():
-            # Check within cell + 26 neighbors
             neighbors = []
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
                     for dz in (-1, 0, 1):
-                        neighbors.extend(grid.get((gx+dx, gy+dy, gz+dz), []))
+                        neighbors.extend(grid.get((gx + dx, gy + dy, gz + dz), []))
             for i_idx in range(len(faces_in_cell)):
                 fi = faces_in_cell[i_idx]
                 for fj in neighbors:
@@ -1799,26 +1734,25 @@ class ZFighting(BaseCheck):
                         continue
                     checked.add(pair)
 
-                    # 1. Coplanar: normals must agree (signed dot > threshold)
                     ni, nj = normals[fi], normals[fj]
-                    dot = ni[0]*nj[0] + ni[1]*nj[1] + ni[2]*nj[2]
+                    dot = ni[0] * nj[0] + ni[1] * nj[1] + ni[2] * nj[2]
                     if dot < _Z_FIGHT_NORMAL_DOT:
                         continue
 
-                    # 2. Adjacency: skip faces sharing a vertex
-                    if face_verts[fi] & face_verts[fj]:
+                    if face_vsets[fi] & face_vsets[fj]:
                         continue
 
-                    # 3. Centroid distance
                     ci, cj = centroids[fi], centroids[fj]
-                    dx = ci[0]-cj[0]; dy = ci[1]-cj[1]; dz = ci[2]-cj[2]
-                    if dx*dx + dy*dy + dz*dz > thr_sq:
+                    dx = ci[0] - cj[0]
+                    dy = ci[1] - cj[1]
+                    dz = ci[2] - cj[2]
+                    if dx * dx + dy * dy + dz * dz > thr_sq:
                         continue
 
                     bad.add(fi)
                     bad.add(fj)
 
-        self._bad_components = [f"{shape}.f[{fi}]" for fi in sorted(bad)]
+        self._bad_components = [snap.shape + ".f[%d]" % fi for fi in sorted(bad)]
         self._count = len(bad)
 
 
@@ -1948,20 +1882,6 @@ class UnusedData(BaseCheck):
 # ("shape.f[3]", "shape.e[5]") so Sel + viewport overlay work as usual.
 
 
-class SnapshotCheck(BaseCheck):
-    """Base for checks that run against a MeshSnapshot."""
-
-    def run(self, dag_path, ctx=None):
-        snap = ctx.get("snapshot") if ctx else None
-        if snap is None:
-            return
-        self.reset()
-        self.run_snapshot(snap)
-
-    def run_snapshot(self, snap):
-        raise NotImplementedError
-
-
 class HardEdges(SnapshotCheck):
     """Sharp edges (dihedral angle >= threshold) that are NOT marked hard.
 
@@ -1974,16 +1894,8 @@ class HardEdges(SnapshotCheck):
 
     @staticmethod
     def _face_normal(snap, face_id):
-        """Newell's method — robust for concave/n-gon faces."""
-        vs = snap.face_verts[face_id]
-        nx = ny = nz = 0.0
-        pts = snap.points
-        for i in range(len(vs)):
-            a = pts[vs[i]]
-            b = pts[vs[(i + 1) % len(vs)]]
-            nx += (a[1] - b[1]) * (a[2] + b[2])
-            ny += (a[2] - b[2]) * (a[0] + b[0])
-            nz += (a[0] - b[0]) * (a[1] + b[1])
+        """Unit normal via Newell's method (shared helper)."""
+        nx, ny, nz = _newell_normal(snap.points, snap.face_verts[face_id])
         length = (nx * nx + ny * ny + nz * nz) ** 0.5
         if length < 1e-12:
             return None
@@ -2023,6 +1935,9 @@ class HardEdges(SnapshotCheck):
                 bad.append(snap.shape + ".e[%d]" % eid)
         self._count = len(bad)
         self._bad_components = bad
+        note = _custom_normals_note(self._last_dag_path, bad, snap)
+        if note:
+            self.note_text = note
 
 
 class Lamina(SnapshotCheck):

@@ -46,6 +46,53 @@ class MeshSnapshot:
     # scene-level context shared by all snapshots of one run
     scene: Dict = field(default_factory=dict)     # e.g. {"short_names": {name: count}}
 
+    # ── lazy adjacency (built on first request, shared by all snapshot checks;
+    #    single main-thread use, no locking) ──
+    _vert_edges: Optional[Dict[int, List[int]]] = field(
+        default=None, init=False, repr=False, compare=False)
+    _vert_faces: Optional[Dict[int, List[int]]] = field(
+        default=None, init=False, repr=False, compare=False)
+    _edge_faces: Optional[Dict[int, List[int]]] = field(
+        default=None, init=False, repr=False, compare=False)
+
+    def vert_edges(self) -> Dict[int, List[int]]:
+        """vertId -> [edgeId, ...]"""
+        if self._vert_edges is None:
+            m: Dict[int, List[int]] = {}
+            for eid, (a, b) in enumerate(self.edges):
+                m.setdefault(a, []).append(eid)
+                m.setdefault(b, []).append(eid)
+            self._vert_edges = m
+        return self._vert_edges
+
+    def vert_faces(self) -> Dict[int, List[int]]:
+        """vertId -> [faceId, ...] (distinct faces containing the vertex)"""
+        if self._vert_faces is None:
+            m: Dict[int, List[int]] = {}
+            for fid, verts in enumerate(self.face_verts):
+                for v in set(verts):
+                    m.setdefault(v, []).append(fid)
+            self._vert_faces = m
+        return self._vert_faces
+
+    def edge_faces(self) -> Dict[int, List[int]]:
+        """edgeId -> [faceId, ...] — from face corner walks (a wire edge not
+        walked by any face is absent; wire edges have no faces anyway)."""
+        if self._edge_faces is None:
+            pairs: Dict[Tuple[int, int], int] = {}
+            for eid, (a, b) in enumerate(self.edges):
+                pairs[(a, b) if a < b else (b, a)] = eid
+            m: Dict[int, List[int]] = {}
+            for fid, verts in enumerate(self.face_verts):
+                n = len(verts)
+                for i in range(n):
+                    a, b = verts[i], verts[(i + 1) % n]
+                    eid = pairs.get((a, b) if a < b else (b, a))
+                    if eid is not None:
+                        m.setdefault(eid, []).append(fid)
+            self._edge_faces = m
+        return self._edge_faces
+
 
 def build_snapshot(dag_path: om.MDagPath, transform: str,
                    want_area: bool = True, want_lamina: bool = True,
