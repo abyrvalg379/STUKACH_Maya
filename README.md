@@ -4,7 +4,7 @@ Pipeline asset validator for Autodesk Maya. 44 checkers across 7 categories — 
 
 Part of the **STUKACH — Pipeline Asset Validation System**. The Blender version lives at [abyrvalg379/STUKACH](https://github.com/abyrvalg379/STUKACH).
 
-**Author:** Maksim Kovalev · **Version:** 1.2.0 · **License:** GPL-3.0
+**Author:** Maksim Kovalev · **Version:** 1.3.0 · **License:** GPL-3.0
 
 *Документация на русском: [README.ru.md](README.ru.md)*
 
@@ -52,6 +52,7 @@ The installer copies the package to `Documents/maya/2025/scripts/MAYA_STUKACH/`,
 - **Reports** — JSON / CSV / HTML export.
 - **Live mode** — revalidates dirty objects every second; progressive validation keeps Maya responsive on heavy scenes.
 - **Coordinator workstation flags** — via the «...» menu: «Start in Coordinator Mode» opens the panel in coordinator view; «Coordinator Lock» hides all fix actions in Coordinator Mode (curator reviews and reports, artist fixes).
+- **Empty Groups** — scene-level scan for transforms with no children (clutter left after rebuilds/imports); select and delete manually.
 - **Checkpoint** — store the validation snapshot inside the scene file and restore it after reopening.
 - **USD pre-flight** — gate exports the same way as FBX.
 - **Session log & Debug Info** — one click copies versions, state and the recent log to clipboard for bug reports.
