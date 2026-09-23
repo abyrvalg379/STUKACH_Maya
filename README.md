@@ -4,7 +4,7 @@ Pipeline asset validator for Autodesk Maya. 44 checkers across 7 categories — 
 
 Part of the **STUKACH — Pipeline Asset Validation System**. The Blender version lives at [abyrvalg379/STUKACH](https://github.com/abyrvalg379/STUKACH).
 
-**Author:** Maksim Kovalev · **Version:** 1.1.1 · **License:** GPL-3.0
+**Author:** Maksim Kovalev · **Version:** 1.1.2 · **License:** GPL-3.0
 
 *Документация на русском: [README.ru.md](README.ru.md)*
 
@@ -44,6 +44,7 @@ The installer copies the package to `Documents/maya/2025/scripts/MAYA_STUKACH/`,
 ## Features
 
 - **Viewport overlay** — per-face vertex colours (VP2 DrawOverride, C++ plugin) with edge/vertex/bbox modes; falls back to display layers when the plugin is absent.
+- **Component cap** — a check that flags thousands of components (sharp edges on all-soft hardsurf can hit 300k+) keeps the honest count but stores a capped, evenly spread sample for the overlay; Select is disabled for such findings.
 - **One-click fixes** — apply transforms, delete history, merge duplicates, and more, per check or per category.
 - **Severity model** — BLOCKER / WARNING / INFO, asset status roll-up, publish pre-flight.
 - **Ignore system** — silence a specific check on a specific object; excluded from all roll-ups.

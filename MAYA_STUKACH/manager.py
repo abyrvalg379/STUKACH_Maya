@@ -26,7 +26,7 @@ from . import overlay as _overlay
 from .snapshot import build_snapshot, build_scene_ctx
 
 # Single source of truth for the panel header, reports and debug info.
-_VERSION = "1.1.1"
+_VERSION = "1.1.2"
 
 
 # ── session log (Blender parity: alog + ring buffer + %TEMP% file) ───────────
@@ -183,6 +183,7 @@ class MayaCheckObject:
                 else:
                     checker.run(self.dag_path)
                 checker._ran = True
+                checker.clamp_bad_components()
             except Exception as e:
                 checker.reset()
                 alog("Error in %s on %s: %s" % (key, self.transform, e))
