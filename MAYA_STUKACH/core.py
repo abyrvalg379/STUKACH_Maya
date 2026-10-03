@@ -488,16 +488,7 @@ class UVMaterialUDIM(BaseCheck):
 
 # ─── NAMING ───────────────────────────────────────────────────────────────────
 
-# Default naming policy: lowercase, letters/digits/underscores, optional suffix
-_DEFAULT_NAME_PATTERN = re.compile(r'^[a-z][a-z0-9_]*$')
 _DEFAULT_MAT_SUFFIX   = "_mat"
-
-# Forbidden DCC default names (would be renamed on FBX import downstream)
-_FORBIDDEN_NAMES = frozenset({
-    "pCube", "pSphere", "pCylinder", "pCone", "pTorus", "pPlane",
-    "polySurface", "nurbsCircle", "nurbsCube", "group", "locator",
-    "transform", "mesh", "object",
-})
 
 
 class NamingPolicy:
@@ -600,53 +591,42 @@ class NamingPolicy:
                 pass
 
     @classmethod
-    def validate_group(cls, name: str) -> list:
-        """Issues for a namespace/layer name (lowercase + prefix/suffix policy)."""
-        issues = []
-        if not _DEFAULT_NAMESPACE_PATTERN.match(name):
-            issues.append("not lowercase_snake_case")
-        prefix = cls.get_col_prefix()
-        if prefix and not name.startswith(prefix):
-            issues.append(f"missing prefix '{prefix}'")
-        suffix = cls.get_col_suffix()
-        if suffix and not name.endswith(suffix):
-            issues.append(f"missing suffix '{suffix}'")
-        return issues
+    def get_policy(cls) -> dict:
+        """Scene naming prefs as a stukach_core.naming policy dict.
 
-    @classmethod
-    def validate(cls, name: str) -> list:
-        """Return list of issue strings for a name. Empty = clean."""
-        issues = []
-        # 1. Basic pattern
-        if not _DEFAULT_NAME_PATTERN.match(name):
-            issues.append(f"invalid chars (need lowercase, underscores)")
-        # 2. Forbidden DCC names
-        base = re.sub(r'\d+$', '', name)  # strip trailing digits (pCube1 -> pCube)
-        if base in _FORBIDDEN_NAMES or name in _FORBIDDEN_NAMES:
-            issues.append(f"forbidden default name '{name}'")
-        # 3. Required prefix
+        The math lives in the vendored DCC-free core (validate_object_name /
+        validate_collection_name); this only translates the single
+        prefix/suffix fileInfo prefs into the core's list-shaped policy."""
         prefix = cls.get_prefix()
-        if prefix and not name.startswith(prefix):
-            issues.append(f"missing prefix '{prefix}'")
-        # 4. Required suffix
         suffix = cls.get_suffix()
-        if suffix and not name.endswith(suffix):
-            issues.append(f"missing suffix '{suffix}'")
-        return issues
+        col_prefix = cls.get_col_prefix()
+        col_suffix = cls.get_col_suffix()
+        return {
+            "object": {
+                "required_prefixes": [prefix] if prefix else [],
+                "required_suffixes": [suffix] if suffix else [],
+                "positions": [],
+            },
+            "collection": {
+                "required_prefixes": [col_prefix] if col_prefix else [],
+                "required_suffixes": [col_suffix] if col_suffix else [],
+            },
+        }
 
 
 class ObjNaming(BaseCheck):
-    """Object name must match naming policy."""
+    """Object name must match the naming contract (stukach_core.naming)."""
     severity = "WARNING"
 
     def run(self, dag_path: om.MDagPath) -> None:
         self.reset()
         node = dag_path.fullPathName()
         short = node.split("|")[-1].split(":")[-1]   # strip namespace/path
-        issues = NamingPolicy.validate(short)
-        if issues:
-            self._count = len(issues)
-            self.metric_text = "; ".join(issues)
+        findings = _core.naming.validate_object_name(
+            short, "MESH", NamingPolicy.get_policy())
+        if findings:
+            self._count = len(findings)
+            self.metric_text = "; ".join(f["message"] for f in findings)
 
 
 class MatSuffix(BaseCheck):
@@ -1640,16 +1620,15 @@ _MODIFIER_EXCLUDE = frozenset({
 # (modifier_stack removed: in Maya the modifier stack IS the construction
 # history — covered by the binary ConstructionHistory check)
 
-# ─── COL/NAMESPACE NAMING (ported from Blender's ColNaming) ───────────────────
-
-_DEFAULT_NAMESPACE_PATTERN = re.compile(r'^[a-z][a-z0-9_]*$')
+# ─── COL/NAMESPACE NAMING (ported from Blender's ColNaming; on the core) ──────
 
 
 class ColNaming(BaseCheck):
     """Validate namespace and display layer naming conventions.
 
     Ported from Blender's ColNaming checker. In Maya, collections map
-    to namespaces and display layers.
+    to namespaces and display layers. The verdicts come from the vendored
+    stukach_core.naming contract — one finding per name (first rule wins).
     """
     severity = "WARNING"
 
@@ -1660,23 +1639,25 @@ class ColNaming(BaseCheck):
         transform = cmds.listRelatives(shape, parent=True, fullPath=True) or [shape.split(".")[0]]
         transform = transform[0]
 
+        policy = NamingPolicy.get_policy()
         issues = []
 
-        # Check namespace against the group naming policy
+        # Check namespace against the collection naming contract
         short = transform.split("|")[-1]
         if ":" in short:
             ns = short.rsplit(":", 1)[0]
-            ns_issues = NamingPolicy.validate_group(ns)
-            for msg in ns_issues:
-                issues.append(f"namespace '{ns}' — {msg}")
+            finding = _core.naming.validate_collection_name(ns, policy)
+            if finding:
+                issues.append(f"namespace '{ns}' — {finding['message']}")
 
         # Check display layers the object belongs to
         layers = cmds.listConnections(transform, type="displayLayer") or []
         for layer in set(layers):
             if layer == "defaultLayer":
                 continue
-            for msg in NamingPolicy.validate_group(layer):
-                issues.append(f"layer '{layer}' — {msg}")
+            finding = _core.naming.validate_collection_name(layer, policy)
+            if finding:
+                issues.append(f"layer '{layer}' — {finding['message']}")
 
         self._count = len(issues)
         self._bad_components = []
