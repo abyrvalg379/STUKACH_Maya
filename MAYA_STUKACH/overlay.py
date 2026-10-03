@@ -109,10 +109,14 @@ def _get_check_color(check_key: str) -> tuple:
 def _vp2_available() -> bool:
     """Check if the C++ stukachDrawOverride plugin is loaded (cached)."""
     global _plugin_cache
-    if _plugin_cache is not None:
-        return _plugin_cache
+    if _plugin_cache:
+        return True
     try:
-        _plugin_cache = cmds.pluginInfo("stukachDrawOverride.mll", query=True, loaded=True)
+        # Re-probe while False: the plugin can appear mid-session (manual
+        # load, autoload).  Only the positive result is cached, so the hot
+        # path stays free of cmds calls once the plugin is up.
+        _plugin_cache = bool(cmds.pluginInfo("stukachDrawOverride.mll",
+                                             query=True, loaded=True))
     except Exception:
         _plugin_cache = False
     return _plugin_cache
