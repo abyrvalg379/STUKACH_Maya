@@ -80,7 +80,7 @@ MAYA_STUKACH.launch()
   `Shelf icon: NOT FOUND ... (button uses stock icon)`
 
 **Сопровождение иконки:**
-- Исходник лежит в `D:\AI\ZCode\Project\STUKACH\logo\` (`stukach_shelf_logo.png` для кнопки,
+- Исходник лежит в дереве Blender-репозитория STUKACH, папка `logo/` (`stukach_shelf_logo.png` для кнопки,
   `stukach_logo.png` для документации/окон)
 - Рабочая копия — `maya/icons/stukach_shelf_logo.png` (рядом с инсталлятором,
   коммитится в репозиторий)
@@ -89,7 +89,7 @@ MAYA_STUKACH.launch()
 **Ручное обновление без реинсталла** (например, при правке PNG):
 ```bash
 # Копировать в активный путь иконок Maya
-cp "D:/AI/ZCode/Project/STUKACH/maya/icons/stukach_shelf_logo.png" \
+cp maya/icons/stukach_shelf_logo.png \
    "C:/Users/<user>/Documents/maya/2025/prefs/icons/stukach_shelf_logo.png"
 ```
 Перезапустить Maya — новая иконка подхватится автоматически.

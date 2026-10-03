@@ -28,7 +28,9 @@ _MAYA_SCRIPTS_DST = os.path.join(_SCRIPTS_DIR, "MAYA_STUKACH")
 try:
     _SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 except NameError:
-    _SRC_DIR = r"D:\AI\ZCode\Project\STUKACH\work\maya"
+    # drag&drop exec may not define __file__ - point STUKACH_MAYA_SRC at the
+    # folder holding MAYA_STUKACH/ (the repository work/maya tree)
+    _SRC_DIR = os.environ.get("STUKACH_MAYA_SRC", "")
 
 _PYTHON_PACKAGE = os.path.join(_SRC_DIR, "MAYA_STUKACH")
 # C++ plugin: distributive layout first (plug-ins/ next to this script),
