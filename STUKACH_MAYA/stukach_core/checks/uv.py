@@ -762,9 +762,7 @@ def check_uv_padding_scene(snaps, tex_size: int = 4096, shell_px: int = 16,
 def check_uv_padding_batch(snaps, tex_size: int = 4096, shell_px: int = 16,
                            tile_px: int = 8, max_polys: int = 50_000,
                            max_uv_verts: int = 200_000):
-    """UV islands closer than shell_px to another island, or tile_px to a
-    UDIM tile border (scene scope: one evaluation over a snapshot batch,
-    findings carry owner)."""
+    """Registry wrapper: only the non-clean findings (run_scene_checks path)."""
     findings, _ = check_uv_padding_scene(snaps, tex_size, shell_px, tile_px,
                                          max_polys, max_uv_verts)
     return [f for f in findings.values() if f.count > 0]
