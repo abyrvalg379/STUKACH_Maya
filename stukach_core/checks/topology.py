@@ -5,6 +5,8 @@ Ported 1:1 from MAYA_STUKACH core.py SnapshotCheck implementations
 (2026-10-03 strangler, stage 1).  Findings carry index-based elements;
 adapters render native component strings.
 """
+from typing import Optional
+
 from ..model import MeshSnapshot, Finding, edge_length
 
 
@@ -87,10 +89,19 @@ def check_zero_area(snap: MeshSnapshot, threshold: float = 1e-10) -> Optional[Fi
 
 
 def check_poles(snap: MeshSnapshot) -> Optional[Finding]:
-    """N-poles (3 edges) and E-poles (5+ edges) — convention, INFO."""
+    """N-poles (3 edges) and E-poles (5+) on INTERIOR vertices only.
+
+    Boundary vertices are excluded: their reduced valence is topologically
+    expected, not a pole (Blender-parity semantics)."""
+    boundary_verts = set()
+    for eid, conn in enumerate(snap.edge_conn):
+        if conn <= 1:
+            boundary_verts.update(snap.edges[eid])
     n_poles = e_poles = more_poles = 0
     bad = []
     for v, e_ids in snap.vert_edges().items():
+        if v in boundary_verts:
+            continue
         ne = len(e_ids)
         if ne == 3:
             n_poles += 1
