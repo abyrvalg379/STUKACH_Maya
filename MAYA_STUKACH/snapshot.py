@@ -50,7 +50,13 @@ def build_snapshot(dag_path: om.MDagPath, transform: str,
         face_lamina.append(face_it.isLamina() if want_lamina else False)
         face_starlike.append(face_it.isStarlike() if want_starlike else False)
         if face_it.hasUVs():
-            face_uvs.append(tuple(face_it.getUVs()) if want_uvs else ())
+            if want_uvs:
+                # core contract: flat [u0, v0, u1, v1, ...] per face —
+                # getUVs() returns (u, v, w) MFloatArrays, interleave them
+                u_arr, v_arr = face_it.getUVs()[:2]
+                face_uvs.append(tuple(c for pair in zip(u_arr, v_arr) for c in pair))
+            else:
+                face_uvs.append(())
         else:
             face_uvs.append(None)
         face_it.next()
