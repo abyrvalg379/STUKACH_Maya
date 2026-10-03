@@ -17,6 +17,8 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 
 import maya.cmds as cmds
+
+import stukach_core as _core   # vendored DCC-free core
 import maya.api.OpenMaya as om
 
 
@@ -140,6 +142,20 @@ class SnapshotCheck(BaseCheck):
         raise NotImplementedError
 
 
+_ELEM_FMT = {"face": ".f[%d]", "edge": ".e[%d]", "vert": ".vtx[%d]"}
+
+
+def _absorb(check, snap, finding):
+    """Map a core Finding onto Maya check fields (native component strings)."""
+    if finding is None:
+        return
+    check._count = finding.count
+    check._bad_components = [
+        snap.shape + _ELEM_FMT[t] % i for (t, i) in finding.elements]
+    if finding.metric:
+        check.metric_text = finding.metric
+
+
 def _newell_normal(points, verts):
     """Newell's method face normal — robust for concave/n-gon faces."""
     nx = ny = nz = 0.0
@@ -157,20 +173,14 @@ class Triangles(SnapshotCheck):
     severity = "WARNING"
 
     def run_snapshot(self, snap):
-        bad = [snap.shape + ".f[%d]" % fi
-               for fi, verts in enumerate(snap.face_verts) if len(verts) == 3]
-        self._count = len(bad)
-        self._bad_components = bad
+        _absorb(self, snap, _core.topology.check_triangles(snap))
 
 
 class Ngons(SnapshotCheck):
     severity = "BLOCKER"
 
     def run_snapshot(self, snap):
-        bad = [snap.shape + ".f[%d]" % fi
-               for fi, verts in enumerate(snap.face_verts) if len(verts) > 4]
-        self._count = len(bad)
-        self._bad_components = bad
+        _absorb(self, snap, _core.topology.check_ngons(snap))
 
 
 class NonManifold(SnapshotCheck):
@@ -226,18 +236,7 @@ class NonManifold(SnapshotCheck):
         referenced = set(ve.keys()) | set(vf.keys())
         iso = [v for v in range(len(snap.points)) if v not in referenced]
 
-        bad_verts = list(dict.fromkeys(bad_verts + iso))
-        self._bad_components = bad_edges + bad_faces + bad_verts
-        self._count = len(bad_edges) + len(bad_faces) + len(bad_verts)
-        parts = []
-        if bad_edges:
-            parts.append("%d edges" % len(bad_edges))
-        if bad_faces:
-            parts.append("%d lamina" % len(bad_faces))
-        if bad_verts:
-            parts.append("%d verts" % len(bad_verts))
-        if parts:
-            self.metric_text = " + ".join(parts)
+        _absorb(self, snap, _core.topology.check_non_manifold(snap))
 
 
 class ZeroArea(SnapshotCheck):
@@ -245,10 +244,7 @@ class ZeroArea(SnapshotCheck):
     _THRESHOLD = 1e-10
 
     def run_snapshot(self, snap):
-        bad = [snap.shape + ".f[%d]" % fi
-               for fi, area in enumerate(snap.face_area) if area < self._THRESHOLD]
-        self._count = len(bad)
-        self._bad_components = bad
+        _absorb(self, snap, _core.topology.check_zero_area(snap, self._THRESHOLD))
 
 
 class Poles(SnapshotCheck):
@@ -256,47 +252,21 @@ class Poles(SnapshotCheck):
     severity = "INFO"
 
     def run_snapshot(self, snap):
-        n_poles = e_poles = more_poles = 0
-        bad = []
-        for v, e_ids in snap.vert_edges().items():
-            ne = len(e_ids)
-            if ne == 3:
-                n_poles += 1
-                bad.append(snap.shape + ".vtx[%d]" % v)
-            elif ne == 5:
-                e_poles += 1
-                bad.append(snap.shape + ".vtx[%d]" % v)
-            elif ne > 5:
-                more_poles += 1
-                bad.append(snap.shape + ".vtx[%d]" % v)
-        self._count = len(bad)
-        self._bad_components = bad
-        parts = []
-        if n_poles:   parts.append("%dN" % n_poles)
-        if e_poles:   parts.append("%dE" % e_poles)
-        if more_poles: parts.append("%d+" % more_poles)
-        self.metric_text = " ".join(parts)
+        _absorb(self, snap, _core.topology.check_poles(snap))
 
 
 class IsolatedVerts(SnapshotCheck):
     severity = "WARNING"
 
     def run_snapshot(self, snap):
-        referenced = set(snap.vert_edges().keys()) | set(snap.vert_faces().keys())
-        bad = [snap.shape + ".vtx[%d]" % v
-               for v in range(len(snap.points)) if v not in referenced]
-        self._count = len(bad)
-        self._bad_components = bad
+        _absorb(self, snap, _core.topology.check_isolated_verts(snap))
 
 
 class BoundaryEdges(SnapshotCheck):
     severity = "WARNING"
 
     def run_snapshot(self, snap):
-        bad = [snap.shape + ".e[%d]" % eid
-               for eid, conn in enumerate(snap.edge_conn) if conn == 1]
-        self._count = len(bad)
-        self._bad_components = bad
+        _absorb(self, snap, _core.topology.check_boundary_edges(snap))
 
 
 # ─── TRANSFORMS ───────────────────────────────────────────────────────────────
@@ -742,31 +712,7 @@ class DuplicateVerts(SnapshotCheck):
     _MERGE_DIST = 1e-5   # 0.01 mm — only truly coincident verts
 
     def run_snapshot(self, snap):
-        n = len(snap.points)
-        if n < 2:
-            return
-        try:
-            from scipy.spatial import cKDTree
-        except ImportError:
-            self.metric_text = "scipy not installed - install via: mayapy -m pip install scipy"
-            return
-        import numpy as np
-        co_all = np.array(snap.points, dtype=np.float64)
-        finite = np.isfinite(co_all).all(axis=1)
-        reasonable = (np.abs(co_all) < 1e8).all(axis=1)
-        mask = finite & reasonable
-        valid_idx = np.where(mask)[0]
-        co = co_all[mask]
-        if len(co) < 2:
-            return
-        tree = cKDTree(co)
-        pairs = tree.query_pairs(r=self._MERGE_DIST, output_type='ndarray')
-        if len(pairs) == 0:
-            return
-        dup_local = np.unique(pairs.ravel())
-        dup_mesh = np.sort(valid_idx[dup_local])
-        self._bad_components = [snap.shape + ".vtx[%d]" % int(i) for i in dup_mesh]
-        self._count = len(self._bad_components)
+        _absorb(self, snap, _core.topology.check_duplicate_verts(snap, self._MERGE_DIST))
 
 
 # ─── TOPOLOGY: face_aspect_ratio ─────────────────────────────────────────────
@@ -781,26 +727,8 @@ class FaceAspectRatio(SnapshotCheck):
     _DEFAULT_THRESHOLD = 6.0
 
     def run_snapshot(self, snap):
-        pts = snap.points
-        bad = []
-        threshold = self._DEFAULT_THRESHOLD
-        for fi, verts in enumerate(snap.face_verts):
-            if len(verts) != 4:
-                continue
-            a, b, c, d = (pts[v] for v in verts)
-            e0 = math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2)
-            e1 = math.sqrt((b[0]-c[0])**2 + (b[1]-c[1])**2 + (b[2]-c[2])**2)
-            e2 = math.sqrt((c[0]-d[0])**2 + (c[1]-d[1])**2 + (c[2]-d[2])**2)
-            e3 = math.sqrt((d[0]-a[0])**2 + (d[1]-a[1])**2 + (d[2]-a[2])**2)
-            avg_a = (e0 + e2) * 0.5
-            avg_b = (e1 + e3) * 0.5
-            if avg_a < 1e-10 or avg_b < 1e-10:
-                continue
-            ratio = avg_a / avg_b if avg_a > avg_b else avg_b / avg_a
-            if ratio > threshold:
-                bad.append(snap.shape + ".f[%d]" % fi)
-        self._bad_components = bad
-        self._count = len(bad)
+        _absorb(self, snap, _core.checks.surface.check_face_aspect_ratio(
+            snap, self._DEFAULT_THRESHOLD))
 
 
 
@@ -821,36 +749,8 @@ class SymmetryCheck(SnapshotCheck):
     _THRESHOLD: float = 0.001
 
     def run_snapshot(self, snap):
-        import numpy as np
-        n = len(snap.points)
-        if n == 0:
-            return
-        co_np = np.array(snap.points, dtype=np.float64).reshape(n, 3)
-
-        thr = self._THRESHOLD
-        axis = self._AXIS
-        inv = 1.0 / max(thr, 1e-9)
-        SHIFT = 1_000_000
-        SPAN = 2 * SHIFT + 1
-
-        gi = np.round(co_np * inv).astype(np.int64)
-        gi = np.clip(gi, -SHIFT, SHIFT)
-        gc = gi + SHIFT
-
-        packed = (gc[:, 0] * SPAN + gc[:, 1]) * SPAN + gc[:, 2]
-        packed_sorted = np.sort(packed)
-
-        mi = gc.copy()
-        mi[:, axis] = (-gi[:, axis]).clip(-SHIFT, SHIFT) + SHIFT
-        m_packed = (mi[:, 0] * SPAN + mi[:, 1]) * SPAN + mi[:, 2]
-
-        idx = np.searchsorted(packed_sorted, m_packed)
-        idx = np.clip(idx, 0, len(packed_sorted) - 1)
-        asym_mask = packed_sorted[idx] != m_packed
-
-        asym_idx = list(np.where(asym_mask)[0].tolist())
-        self._bad_components = [snap.shape + ".vtx[%d]" % i for i in asym_idx]
-        self._count = len(asym_idx)
+        _absorb(self, snap, _core.checks.symmetry.check_symmetry(
+            snap, axis=self._AXIS, threshold=self._THRESHOLD))
 
 
 class SymmetryX(SymmetryCheck):
@@ -1913,12 +1813,7 @@ class Lamina(SnapshotCheck):
     severity = "BLOCKER"
 
     def run_snapshot(self, snap):
-        bad = [
-            snap.shape + ".f[%d]" % i
-            for i, is_lamina in enumerate(snap.face_lamina) if is_lamina
-        ]
-        self._count = len(bad)
-        self._bad_components = bad
+        _absorb(self, snap, _core.topology.check_lamina(snap))
 
 
 class ZeroLengthEdges(SnapshotCheck):
@@ -1927,15 +1822,7 @@ class ZeroLengthEdges(SnapshotCheck):
     _TOL = 1e-8
 
     def run_snapshot(self, snap):
-        bad = []
-        pts = snap.points
-        for i, (v0, v1) in enumerate(snap.edges):
-            a, b = pts[v0], pts[v1]
-            d = ((a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2) ** 0.5
-            if d <= self._TOL:
-                bad.append(snap.shape + ".e[%d]" % i)
-        self._count = len(bad)
-        self._bad_components = bad
+        _absorb(self, snap, _core.topology.check_zero_length_edges(snap, self._TOL))
 
 
 class Starlike(SnapshotCheck):
@@ -1943,12 +1830,7 @@ class Starlike(SnapshotCheck):
     severity = "WARNING"
 
     def run_snapshot(self, snap):
-        bad = [
-            snap.shape + ".f[%d]" % i
-            for i, st in enumerate(snap.face_starlike) if st is False
-        ]
-        self._count = len(bad)
-        self._bad_components = bad
+        _absorb(self, snap, _core.topology.check_starlike(snap))
 
 
 class MissingUVs(SnapshotCheck):
@@ -1956,12 +1838,7 @@ class MissingUVs(SnapshotCheck):
     severity = "WARNING"
 
     def run_snapshot(self, snap):
-        bad = [
-            snap.shape + ".f[%d]" % i
-            for i, uvs in enumerate(snap.face_uvs) if uvs is None
-        ]
-        self._count = len(bad)
-        self._bad_components = bad
+        _absorb(self, snap, _core.topology.check_missing_uvs(snap))
 
 
 class DuplicatedNames(SnapshotCheck):
@@ -1969,12 +1846,7 @@ class DuplicatedNames(SnapshotCheck):
     severity = "BLOCKER"
 
     def run_snapshot(self, snap):
-        n = snap.scene.get("short_names", {}).get(snap.short_name, 0)
-        if n > 1:
-            self._count = 1
-            self.metric_text = "'%s' used by %d nodes" % (snap.short_name, n)
-        else:
-            self._count = 0
+        _absorb(self, snap, _core.checks.scene.check_duplicated_names(snap))
 
 
 class ShapeNames(SnapshotCheck):
@@ -1982,10 +1854,7 @@ class ShapeNames(SnapshotCheck):
     severity = "WARNING"
 
     def run_snapshot(self, snap):
-        if snap.shape_short != snap.short_name + "Shape":
-            self._count = 1
-            self.metric_text = "shape '%s' != '%sShape'" % (
-                snap.shape_short, snap.short_name)
+        _absorb(self, snap, _core.checks.scene.check_shape_names(snap))
 
 
 class TrailingNumbers(SnapshotCheck):
@@ -1993,10 +1862,7 @@ class TrailingNumbers(SnapshotCheck):
     severity = "WARNING"
 
     def run_snapshot(self, snap):
-        name = snap.short_name.split(":")[-1]
-        if name and name[-1].isdigit():
-            self._count = 1
-            self.metric_text = "trailing digits in '%s'" % snap.short_name
+        _absorb(self, snap, _core.checks.scene.check_trailing_numbers(snap))
 
 
 class UncenteredPivots(SnapshotCheck):
@@ -2010,25 +1876,7 @@ class UncenteredPivots(SnapshotCheck):
     _THRESHOLD = 0.05   # fraction of the bbox diagonal
 
     def run_snapshot(self, snap):
-        rp = snap.rotate_pivot
-        if not snap.points:
-            return
-        xs = [pt[0] for pt in snap.points]
-        ys = [pt[1] for pt in snap.points]
-        zs = [pt[2] for pt in snap.points]
-        cx = (min(xs) + max(xs)) / 2.0
-        cy = (min(ys) + max(ys)) / 2.0
-        cz = (min(zs) + max(zs)) / 2.0
-        diag = ((max(xs) - min(xs)) ** 2 + (max(ys) - min(ys)) ** 2 +
-                (max(zs) - min(zs)) ** 2) ** 0.5
-        if diag < 1e-9:
-            return
-        dist = ((rp[0] - cx) ** 2 + (rp[1] - cy) ** 2 +
-                (rp[2] - cz) ** 2) ** 0.5
-        if dist > diag * self._THRESHOLD:
-            self._count = 1
-            self.metric_text = "pivot off-center by %.1f%% of bbox" % (
-                dist / diag * 100.0)
+        _absorb(self, snap, _core.checks.scene.check_uncentered_pivots(snap, self._THRESHOLD))
 
 
 class ParentGeometry(SnapshotCheck):
@@ -2036,9 +1884,7 @@ class ParentGeometry(SnapshotCheck):
     severity = "WARNING"
 
     def run_snapshot(self, snap):
-        if "mesh" in snap.parent_types:
-            self._count = 1
-            self.metric_text = "parented under a mesh"
+        _absorb(self, snap, _core.checks.scene.check_parent_geometry(snap))
 
 
 # ─── CHECK_TYPES — maps key → class ──────────────────────────────────────────

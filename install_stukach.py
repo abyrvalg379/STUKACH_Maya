@@ -186,6 +186,13 @@ def install():
     n = _copy_tree(_PYTHON_PACKAGE, _MAYA_SCRIPTS_DST)
     results.append("Python package: %d files -> %s" % (n, _MAYA_SCRIPTS_DST))
 
+    # 1b. Copy the DCC-free validation core (vendored, NOT pip)
+    _CORE_PACKAGE = os.path.join(_SRC_DIR, "stukach_core")
+    if os.path.isdir(_CORE_PACKAGE):
+        n = _copy_tree(_CORE_PACKAGE, os.path.join(_SCRIPTS_DIR, "stukach_core"))
+        results.append("stukach_core: %d files -> %s" % (
+            n, os.path.join(_SCRIPTS_DIR, "stukach_core")))
+
     # 2. Copy C++ plugin (с защитой от блокировки загруженного .mll)
     if os.path.exists(_CPP_PLUGIN):
         try:
