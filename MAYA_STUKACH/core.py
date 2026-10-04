@@ -1739,54 +1739,14 @@ class HardEdges(SnapshotCheck):
     severity = "WARNING"
     ANGLE_THRESHOLD_DEG = 30.0
 
-    @staticmethod
-    def _face_normal(snap, face_id):
-        """Unit normal via Newell's method (shared helper)."""
-        nx, ny, nz = _newell_normal(snap.points, snap.face_verts[face_id])
-        length = (nx * nx + ny * ny + nz * nz) ** 0.5
-        if length < 1e-12:
-            return None
-        return (nx / length, ny / length, nz / length)
-
     def run_snapshot(self, snap):
-        import math
-        # edge id -> adjacent face ids (from face corner walks)
-        edge_faces = {}
-        face_edge_pairs = {}
-        for eid, (v0, v1) in enumerate(snap.edges):
-            face_edge_pairs[(v0, v1) if v0 < v1 else (v1, v0)] = eid
-        for fid, vs in enumerate(snap.face_verts):
-            n = len(vs)
-            for i in range(n):
-                a, b = vs[i], vs[(i + 1) % n]
-                key = (a, b) if a < b else (b, a)
-                eid = face_edge_pairs.get(key)
-                if eid is not None:
-                    edge_faces.setdefault(eid, []).append(fid)
-
-        threshold = math.radians(self.ANGLE_THRESHOLD_DEG)
-        cos_threshold = math.cos(threshold)
-        bad = []
-        for eid, (v0, v1) in enumerate(snap.edges):
-            if snap.edge_smooth[eid] is False or snap.edge_conn[eid] != 2:
-                continue   # already hard, or boundary/non-manifold
-            faces = edge_faces.get(eid, [])
-            if len(faces) != 2:
-                continue
-            n0 = self._face_normal(snap, faces[0])
-            n1 = self._face_normal(snap, faces[1])
-            if n0 is None or n1 is None:
-                continue
-            dot = n0[0] * n1[0] + n0[1] * n1[1] + n0[2] * n1[2]
-            if dot < cos_threshold:   # angle > threshold while edge is smooth
-                bad.append(snap.shape + ".e[%d]" % eid)
-        self._count = len(bad)
-        self._bad_components = bad
-        # NOTE on custom (locked) normals — empirically (2026-09-23): Maya
-        # reports edges touching locked-normal verts as NOT smooth, so such
-        # edges never reach the flag above. hard_edges is naturally silent on
-        # custom-normal zones; no annotation is needed (the note candidate is
-        # closed). BaseCheck.note_text stays as a generic row-hint mechanism.
+        # Strangler 6b: detection in the vendored core.  bevel_ratio=0 keeps
+        # the historical Maya behaviour (no bevel-aware skip here); the
+        # custom-normal and flat-face skips are inert — the Maya adapter does
+        # not report those flags, and locked-normal zones already read as
+        # hard edges (empirical note 2026-09-23 stands).
+        _absorb(self, snap, _core.checks.surface.check_sharp_edges(
+            snap, threshold_deg=self.ANGLE_THRESHOLD_DEG, bevel_ratio=0.0))
 
 
 class Lamina(SnapshotCheck):
