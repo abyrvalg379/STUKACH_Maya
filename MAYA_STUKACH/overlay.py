@@ -161,6 +161,16 @@ def _serialize_ids(components: List[str], id_type: str) -> str:
     return ",".join(ids)
 
 
+def _mc_enabled(check_key: str) -> bool:
+    """The panel's global toggle for a check — NOT the per-object copy
+    (MayaCheckObject.enabled lags behind checkbox changes)."""
+    try:
+        from .manager import MayaCheck
+        return bool(MayaCheck._enabled_checks.get(check_key, False))
+    except Exception:
+        return False
+
+
 def _vp2_update(objects: Dict[str, object], active_check: Optional[str] = None) -> None:
     """Update stukachLocator nodes with bad component data for VP2 drawing."""
     # Clean up locators for objects no longer tracked. Name-based: locator
@@ -225,12 +235,39 @@ def _vp2_update(objects: Dict[str, object], active_check: Optional[str] = None) 
         edge_rule_color = None
         for er in ("non_manifold", "boundary_edges", "zero_length_edges"):
             er_chk = mco.checkers.get(er)
-            if er_chk and er_chk.count > 0 and mco.enabled.get(er, False):
+            # the PANEL's global toggles are the source of truth here —
+            # mco.enabled is per-object state that can lag behind the user's
+            # checkbox changes
+            if er_chk and er_chk.count > 0 and _mc_enabled(er):
                 edge_rule_color = _CHECK_OVERLAY_COLORS.get(er)
                 break
         if edge_rule_color:
             r, g, b = _hex_to_rgb(edge_rule_color)
             cmds.setAttr(loc + ".edgeHighlightColor", r, g, b, type="double3")
+
+        # faces and POINTS carry the plugin's hard defaults (red / yellow) —
+        # tint them by the highest-priority rule with that element type, so
+        # the viewport matches the panel's per-check colors.  Point rules
+        # first by severity: duplicates (BLOCKER) beat isolated (WARNING)
+        # beat poles (INFO).
+        def _rule_color(rules):
+            for er in rules:
+                er_chk = mco.checkers.get(er)
+                if er_chk and er_chk.count > 0 and _mc_enabled(er):
+                    return _CHECK_OVERLAY_COLORS.get(er)
+            return None
+
+        point_color = _rule_color(("duplicate_verts", "isolated_verts", "poles"))
+        if point_color:
+            r, g, b = _hex_to_rgb(point_color)
+            cmds.setAttr(loc + ".pointColor", r, g, b, type="double3")
+        face_color = _rule_color((
+            "ngons", "zero_area", "lamina", "z_fighting", "starlike",
+            "triangles", "missing_uvs", "uv_overlap", "uv_udim_bounds",
+            "uv_material_udim"))
+        if face_color:
+            r, g, b = _hex_to_rgb(face_color)
+            cmds.setAttr(loc + ".faceColor", r, g, b, type="double3")
         cmds.setAttr(loc + ".drawEnabled", True)
         cmds.setAttr(loc + ".drawMode", 1 if active_check else 0)
 
