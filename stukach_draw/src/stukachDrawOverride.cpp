@@ -35,7 +35,7 @@ MPxDrawOverride* StukachDrawOverride::creator(const MObject& obj)
 // ── Constructor ─────────────────────────────────────────────────────────────
 
 StukachDrawOverride::StukachDrawOverride(const MObject& obj)
-    : MPxDrawOverride(obj, NULL, false)  // isAlwaysDirty = false — performance over live updates
+    : MPxDrawOverride(obj, NULL, true)  // isAlwaysDirty = true — setAttr on overlay attrs must invalidate (live debugging 2026-10-04)
     , fNode(obj)
 {
     // Register callback to mark dirty when viewport display mode changes
@@ -260,17 +260,17 @@ void StukachDrawOverride::buildEdgeLines(
     unsigned nPts = allPts.length();
     if (nPts == 0) return;
 
-    MItMeshEdge edgeIt(meshPath);
     unsigned nToDraw = edgeIds.length();
     if (nToDraw > STUKACH_MAX_DRAW_FACES * 4) {
         nToDraw = STUKACH_MAX_DRAW_FACES * 4;
     }
+    int edgeVerts[2];
     for (unsigned i = 0; i < nToDraw; i++) {
         int eid = edgeIds[i];
-        int prev;
-        if (edgeIt.setIndex(eid, prev) != MStatus::kSuccess) continue;
-        int v0 = edgeIt.index(0);
-        int v1 = edgeIt.index(1);
+        if (eid < 0 || eid >= (int)meshFn.numEdges()) continue;
+        if (meshFn.getEdgeVertices(eid, edgeVerts) != MStatus::kSuccess) continue;
+        int v0 = edgeVerts[0];
+        int v1 = edgeVerts[1];
         if (v0 < 0 || (unsigned)v0 >= nPts || v1 < 0 || (unsigned)v1 >= nPts) continue;
         outLines.append(allPts[v0]);
         outLines.append(allPts[v1]);
