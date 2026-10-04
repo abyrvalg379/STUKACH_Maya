@@ -122,9 +122,13 @@ def _vp2_available() -> bool:
     return _plugin_cache
 
 
-def _ensure_locator(transform: str) -> Optional[str]:
-    """Find or create a stukachLocator node connected to this transform's mesh."""
+def _ensure_locator(transform: str, rule: str = "") -> Optional[str]:
+    """Find or create a stukachLocator node connected to this transform's
+    mesh.  Per-rule nodes carry a '__<rule>' suffix so each rule paints its
+    own components in its own color."""
     loc_name = _LOCATOR_PREFIX + transform.split("|")[-1].replace(":", "_")
+    if rule:
+        loc_name += "__" + rule
     if cmds.objExists(loc_name):
         return loc_name
 
@@ -145,6 +149,21 @@ def _ensure_locator(transform: str) -> Optional[str]:
         return loc
     except Exception as e:
         print("[STUKACH] VP2 locator create error: %s" % e)
+        return None
+
+
+def _ensure_rule_locator(transform: str, rule: str, shape_full: str) -> Optional[str]:
+    """Per-rule locator (stukach_loc_<obj>__<rule>) wired to the mesh."""
+    loc_name = (_LOCATOR_PREFIX + transform.split("|")[-1].replace(":", "_")
+                + "__" + rule)
+    if cmds.objExists(loc_name):
+        return loc_name
+    try:
+        loc = cmds.createNode("stukachLocator", name=loc_name, skipSelect=True)
+        cmds.connectAttr("%s.worldMesh[0]" % shape_full, "%s.inputMesh" % loc)
+        return loc
+    except Exception as e:
+        print("[STUKACH] VP2 per-rule locator create error: %s" % e)
         return None
 
 
@@ -177,148 +196,80 @@ def _vp2_update(objects: Dict[str, object], active_check: Optional[str] = None) 
     # names are derived from the transform ("stukach_loc_<name>"), which is
     # deterministic — the old connection/listRelatives check silently
     # returned None on short names and left orphan locators alive.
-    tracked_names = {
-        _LOCATOR_PREFIX + t.split("|")[-1].replace(":", "_")
-        for t in objects.keys()
-    }
+    live_names = set()
+    for t in objects.keys():
+        base = t.split("|")[-1].replace(":", "_")
+        live_names.add(_LOCATOR_PREFIX + base)
+    for rule in ("ngons", "zero_area", "lamina", "z_fighting", "starlike",
+                 "triangles", "missing_uvs", "uv_overlap", "uv_udim_bounds",
+                 "uv_material_udim", "uv_micro_shell", "non_manifold",
+                 "boundary_edges", "zero_length_edges", "duplicate_verts",
+                 "isolated_verts", "poles"):
+        live_names.add(_LOCATOR_PREFIX + base if False else "")
+    live_names.discard("")
     for loc in (cmds.ls(_LOCATOR_PREFIX + "*", type="stukachLocator") or []):
-        if loc.split("|")[-1] not in tracked_names:
+        short = loc.split("|")[-1]
+        # keep "<obj>" legacy nodes and "<obj>__<rule>" per-rule nodes
+        if "__" in short:
+            keep = short.split("__", 1)[0].replace(_LOCATOR_PREFIX, "", 1)
+            keep = _LOCATOR_PREFIX + keep
+        else:
+            keep = short
+        if keep not in live_names:
             try:
                 cmds.delete(loc)
             except Exception:
                 pass
 
-    for transform, mco in objects.items():
-        if not cmds.objExists(transform):
-            continue
+        # ── one locator PER RULE: each rule paints its own components in its
+        # own panel color (single-color-per-node architecture; a shared
+        # locator forced one color over all rules)
+        face_rules = ("ngons", "zero_area", "lamina", "z_fighting", "starlike",
+                      "triangles", "missing_uvs", "uv_overlap",
+                      "uv_udim_bounds", "uv_material_udim", "uv_micro_shell")
+        edge_rules = ("non_manifold", "boundary_edges", "zero_length_edges")
+        point_rules = ("duplicate_verts", "isolated_verts", "poles")
 
-        loc = _ensure_locator(transform)
-        if not loc or not cmds.objExists(loc):
-            continue   # locator died with a scene change between passes
+        def _rule_components(checker):
+            faces, edges, verts = [], [], []
+            for comp in checker.bad_components:
+                if ".f[" in comp:
+                    faces.append(comp)
+                elif ".e[" in comp:
+                    edges.append(comp)
+                elif ".vtx[" in comp:
+                    verts.append(comp)
+            return faces, edges, verts
 
-        # Gather bad components
-        all_faces = []
-        all_edges = []
-        all_verts = []
+        for transform, mco in objects.items():
+            if not cmds.objExists(transform):
+                continue
+            shape = cmds.listRelatives(transform, shapes=True, type="mesh",
+                                       fullPath=True)
+            if not shape:
+                continue
 
-        if active_check:
-            checker = mco.checkers.get(active_check)
-            if checker and checker.count > 0:
-                for comp in checker.bad_components:
-                    if ".f[" in comp:
-                        all_faces.append(comp)
-                    elif ".e[" in comp:
-                        all_edges.append(comp)
-                    elif ".vtx[" in comp:
-                        all_verts.append(comp)
-        else:
-            for key, checker in mco.checkers.items():
-                if not mco.enabled.get(key, False) or checker.count == 0:
+            for rule in face_rules + edge_rules + point_rules:
+                if not _mc_enabled(rule):
                     continue
-                for comp in checker.bad_components:
-                    if ".f[" in comp:
-                        all_faces.append(comp)
-                    elif ".e[" in comp:
-                        all_edges.append(comp)
-                    elif ".vtx[" in comp:
-                        all_verts.append(comp)
+                checker = mco.checkers.get(rule)
+                if checker is None or checker.count == 0:
+                    continue
+                faces, edges, verts = _rule_components(checker)
+                if not (faces or edges or verts):
+                    continue
 
-        # Serialize and set (locator may be deleted by a scene change mid-pass)
-        if not cmds.objExists(loc):
-            continue
-        cmds.setAttr(loc + ".badFaces", _serialize_ids(all_faces, "f"), type="string")
-        cmds.setAttr(loc + ".badEdges", _serialize_ids(all_edges, "e"), type="string")
-        cmds.setAttr(loc + ".badVerts", _serialize_ids(all_verts, "vtx"), type="string")
-        # edge-only rules (non_manifold / boundary / zero_length) draw as
-        # highlight LINES — color them by the highest-priority edge rule
-        # with data (otherwise the plugin default green lies about the rule)
-        edge_rule_color = None
-        for er in ("non_manifold", "boundary_edges", "zero_length_edges"):
-            er_chk = mco.checkers.get(er)
-            # the PANEL's global toggles are the source of truth here —
-            # mco.enabled is per-object state that can lag behind the user's
-            # checkbox changes
-            if er_chk and er_chk.count > 0 and _mc_enabled(er):
-                edge_rule_color = _CHECK_OVERLAY_COLORS.get(er)
-                break
-        if edge_rule_color:
-            r, g, b = _hex_to_rgb(edge_rule_color)
-            cmds.setAttr(loc + ".edgeHighlightColor", r, g, b, type="double3")
-
-        # faces and POINTS carry the plugin's hard defaults (red / yellow) —
-        # tint them by the highest-priority rule with that element type, so
-        # the viewport matches the panel's per-check colors.  Point rules
-        # first by severity: duplicates (BLOCKER) beat isolated (WARNING)
-        # beat poles (INFO).
-        def _rule_color(rules):
-            for er in rules:
-                er_chk = mco.checkers.get(er)
-                if er_chk and er_chk.count > 0 and _mc_enabled(er):
-                    return _CHECK_OVERLAY_COLORS.get(er)
-            return None
-
-        point_color = _rule_color(("duplicate_verts", "isolated_verts", "poles"))
-        if point_color:
-            r, g, b = _hex_to_rgb(point_color)
-            cmds.setAttr(loc + ".pointColor", r, g, b, type="double3")
-        face_color = _rule_color((
-            "ngons", "zero_area", "lamina", "z_fighting", "starlike",
-            "triangles", "missing_uvs", "uv_overlap", "uv_udim_bounds",
-            "uv_material_udim"))
-        if face_color:
-            r, g, b = _hex_to_rgb(face_color)
-            cmds.setAttr(loc + ".faceColor", r, g, b, type="double3")
-        cmds.setAttr(loc + ".drawEnabled", True)
-        cmds.setAttr(loc + ".drawMode", 1 if active_check else 0)
-
-        # Object-level issues (transform checks etc.) report count > 0 with no
-        # bad components — draw a bounding-box wireframe around the object.
-        has_object_issue = False
-        if active_check:
-            c = mco.checkers.get(active_check)
-            has_object_issue = bool(c and c.count > 0 and not c.bad_components)
-        else:
-            has_object_issue = any(
-                mco.enabled.get(k, False) and c.count > 0 and not c.bad_components
-                for k, c in mco.checkers.items()
-            )
-
-        if has_object_issue:
-            try:
-                bb = cmds.exactWorldBoundingBox(transform)
-                (mnx, mny, mnz, mxx, mxy, mxz) = bb
-                cmds.setAttr(loc + ".bboxMinX", float(mnx))
-                cmds.setAttr(loc + ".bboxMinY", float(mny))
-                cmds.setAttr(loc + ".bboxMinZ", float(mnz))
-                cmds.setAttr(loc + ".bboxMaxX", float(mxx))
-                cmds.setAttr(loc + ".bboxMaxY", float(mxy))
-                cmds.setAttr(loc + ".bboxMaxZ", float(mxz))
-                cmds.setAttr(loc + ".drawBBox", True)
-            except Exception:
-                cmds.setAttr(loc + ".drawBBox", False)
-        else:
-            cmds.setAttr(loc + ".drawBBox", False)
-
-        # Trigger VP2 redraw (isAlwaysDirty=false — explicit dirty).
-        # Enabled only when there is something to draw — otherwise the
-        # locator stays dormant (a forever-True toggle churned redraws).
-        # Deferred calls fire AFTER the caller returns — possibly after a
-        # scene change deleted the locator: guard against dead names.
-        has_data = bool(all_faces or all_edges or all_verts or has_object_issue)
-        try:
-            cmds.evalDeferred(
-                lambda l=loc, on=has_data:
-                cmds.setAttr(l + ".drawEnabled", on) if cmds.objExists(l)
-                else None)
-        except Exception:
-            pass
-
-        # Per-check color (user override → Blender default → severity)
-        r, g, b = _locator_color(mco, active_check)
-        cmds.setAttr(loc + ".faceColorR", r)
-        cmds.setAttr(loc + ".faceColorG", g)
-        cmds.setAttr(loc + ".faceColorB", b)
-
+                loc = _ensure_rule_locator(transform, rule, shape[0])
+                if not loc or not cmds.objExists(loc):
+                    continue
+                r, g, b = _hex_to_rgb(_CHECK_OVERLAY_COLORS.get(rule, "#FF00FF"))
+                cmds.setAttr(loc + ".badFaces", _serialize_ids(faces, "f"), type="string")
+                cmds.setAttr(loc + ".badEdges", _serialize_ids(edges, "e"), type="string")
+                cmds.setAttr(loc + ".badVerts", _serialize_ids(verts, "vtx"), type="string")
+                cmds.setAttr(loc + ".faceColor", r, g, b, type="double3")
+                cmds.setAttr(loc + ".edgeHighlightColor", r, g, b, type="double3")
+                cmds.setAttr(loc + ".pointColor", r, g, b, type="double3")
+                cmds.setAttr(loc + ".drawEnabled", True)
 
 def _locator_color(mco, active_check: Optional[str]) -> tuple:
     """Resolve overlay color for one object: user override → Blender default → severity."""
