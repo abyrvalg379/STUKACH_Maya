@@ -86,7 +86,16 @@ def build_snapshot(dag_path: om.MDagPath, transform: str,
     parents = cmds.listRelatives(transform, parent=True, fullPath=True) or []
     parent_types = [cmds.nodeType(pt) for pt in parents]
 
-    mat = cmds.xform(transform, q=True, matrix=True, ws=True)
+    # cmds.xform packs its 4x4 as 3x3 rows + translation + 1 (translation in
+    # elements 12..14); the core expects the Blender row-major layout with
+    # translation in elements 3/7/11 — repack, otherwise every world-space
+    # rule (origin_at_zero, uncentered_pivots, z_fighting_inter, texel
+    # density) reads a zeroed translation and a transposed rotation
+    m = cmds.xform(transform, q=True, matrix=True, ws=True)
+    mat = (m[0], m[1], m[2], m[12],
+           m[4], m[5], m[6], m[13],
+           m[8], m[9], m[10], m[14],
+           0.0, 0.0, 0.0, 1.0)
     rp = cmds.xform(transform, q=True, rotatePivot=True, ws=True)
 
     return MeshSnapshot(
