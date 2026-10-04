@@ -19,11 +19,15 @@ public:
     MPointArray faceVerts;
     MPointArray faceEdges;   // wireframe edges of bad faces
     MPointArray badPoints;   // bad vertices
+    MPointArray badEdgeLines;  // line PAIRS for bad EDGES (non_manifold,
+                               // boundary, zero_length — component-only rules
+                               // that have no faces to fill)
 
     // Colors (set from node attributes)
     MColor faceColor;
     MColor edgeColor;
     MColor pointColor;
+    MColor edgeHighlightColor;  // badEdgeLines color (per-check from overlay)
 
     // Draw mode: 0 = overview (red/yellow layers), 1 = single-check (per-face)
     int drawMode = 0;

@@ -33,6 +33,10 @@ MObject StukachLocatorNode::aEdgeColorR;
 MObject StukachLocatorNode::aEdgeColorG;
 MObject StukachLocatorNode::aEdgeColorB;
 MObject StukachLocatorNode::aEdgeColor;
+MObject StukachLocatorNode::aEdgeHighlightColorR;
+MObject StukachLocatorNode::aEdgeHighlightColorG;
+MObject StukachLocatorNode::aEdgeHighlightColorB;
+MObject StukachLocatorNode::aEdgeHighlightColor;
 MObject StukachLocatorNode::aPointColorR;
 MObject StukachLocatorNode::aPointColorG;
 MObject StukachLocatorNode::aPointColorB;
@@ -141,6 +145,22 @@ MStatus StukachLocatorNode::initialize()
     nAttr.setWritable(true);
     nAttr.setKeyable(true);
     status = addAttribute(aEdgeColor);
+    CHECK_MSTATUS_AND_RETURN_IT(status);
+
+    // Edge highlight color (bad EDGES lines: non_manifold / boundary /
+    // zero_length — green by default, per-check from the overlay)
+    aEdgeHighlightColorR = nAttr.create("edgeHighlightColorR", "ehcr", MFnNumericData::kFloat, 0.02f, &status);
+    CHECK_MSTATUS_AND_RETURN_IT(status);
+    aEdgeHighlightColorG = nAttr.create("edgeHighlightColorG", "ehcg", MFnNumericData::kFloat, 1.0f, &status);
+    CHECK_MSTATUS_AND_RETURN_IT(status);
+    aEdgeHighlightColorB = nAttr.create("edgeHighlightColorB", "ehcb", MFnNumericData::kFloat, 0.02f, &status);
+    CHECK_MSTATUS_AND_RETURN_IT(status);
+    aEdgeHighlightColor = nAttr.create("edgeHighlightColor", "ehc", aEdgeHighlightColorR, aEdgeHighlightColorG, aEdgeHighlightColorB, &status);
+    CHECK_MSTATUS_AND_RETURN_IT(status);
+    nAttr.setStorable(true);
+    nAttr.setWritable(true);
+    nAttr.setKeyable(true);
+    status = addAttribute(aEdgeHighlightColor);
     CHECK_MSTATUS_AND_RETURN_IT(status);
 
     // Point color (float3)

@@ -59,6 +59,14 @@ private:
         float normalOffset
     );
 
+    // Build line PAIRS from bad EDGE indices (non_manifold / boundary /
+    // zero_length — rules whose components are edges, not faces)
+    static void buildEdgeLines(
+        const MDagPath& meshPath,
+        const MIntArray& edgeIds,
+        MPointArray& outLines
+    );
+
     // Build point array from vertex indices
     static void buildVertPoints(
         const MDagPath& meshPath,

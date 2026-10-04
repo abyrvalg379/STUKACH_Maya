@@ -219,6 +219,18 @@ def _vp2_update(objects: Dict[str, object], active_check: Optional[str] = None) 
         cmds.setAttr(loc + ".badFaces", _serialize_ids(all_faces, "f"), type="string")
         cmds.setAttr(loc + ".badEdges", _serialize_ids(all_edges, "e"), type="string")
         cmds.setAttr(loc + ".badVerts", _serialize_ids(all_verts, "vtx"), type="string")
+        # edge-only rules (non_manifold / boundary / zero_length) draw as
+        # highlight LINES — color them by the highest-priority edge rule
+        # with data (otherwise the plugin default green lies about the rule)
+        edge_rule_color = None
+        for er in ("non_manifold", "boundary_edges", "zero_length_edges"):
+            er_chk = mco.checkers.get(er)
+            if er_chk and er_chk.count > 0 and mco.enabled.get(er, False):
+                edge_rule_color = _CHECK_OVERLAY_COLORS.get(er)
+                break
+        if edge_rule_color:
+            r, g, b = _hex_to_rgb(edge_rule_color)
+            cmds.setAttr(loc + ".edgeHighlightColor", r, g, b, type="double3")
         cmds.setAttr(loc + ".drawEnabled", True)
         cmds.setAttr(loc + ".drawMode", 1 if active_check else 0)
 

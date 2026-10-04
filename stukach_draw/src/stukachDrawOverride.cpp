@@ -242,6 +242,41 @@ void StukachDrawOverride::buildFaceTriangles(
     }
 }
 
+// ── Helper: build line pairs from bad EDGE indices ──────────────────────────
+
+void StukachDrawOverride::buildEdgeLines(
+    const MDagPath& meshPath,
+    const MIntArray& edgeIds,
+    MPointArray& outLines)
+{
+    outLines.clear();
+
+    MStatus status;
+    MFnMesh meshFn(meshPath, &status);
+    if (!status) return;
+
+    MPointArray allPts;
+    meshFn.getPoints(allPts, MSpace::kWorld);
+    unsigned nPts = allPts.length();
+    if (nPts == 0) return;
+
+    MItMeshEdge edgeIt(meshPath);
+    unsigned nToDraw = edgeIds.length();
+    if (nToDraw > STUKACH_MAX_DRAW_FACES * 4) {
+        nToDraw = STUKACH_MAX_DRAW_FACES * 4;
+    }
+    for (unsigned i = 0; i < nToDraw; i++) {
+        int eid = edgeIds[i];
+        int prev;
+        if (edgeIt.setIndex(eid, prev) != MStatus::kSuccess) continue;
+        int v0 = edgeIt.index(0);
+        int v1 = edgeIt.index(1);
+        if (v0 < 0 || (unsigned)v0 >= nPts || v1 < 0 || (unsigned)v1 >= nPts) continue;
+        outLines.append(allPts[v0]);
+        outLines.append(allPts[v1]);
+    }
+}
+
 // ── Helper: build point array from vertex indices ───────────────────────────
 
 void StukachDrawOverride::buildVertPoints(
@@ -323,6 +358,17 @@ MUserData* StukachDrawOverride::prepareForDraw(
         );
     } else {
         data->edgeColor = MColor(0.0f, 0.015f, 0.4f);
+    }
+
+    MPlug edgeHighlightPlug = depNode.findPlug(StukachLocatorNode::aEdgeHighlightColor, false, &status);
+    if (status) {
+        data->edgeHighlightColor = MColor(
+            edgeHighlightPlug.child(0).asFloat(),
+            edgeHighlightPlug.child(1).asFloat(),
+            edgeHighlightPlug.child(2).asFloat()
+        );
+    } else {
+        data->edgeHighlightColor = MColor(0.02f, 1.0f, 0.02f);
     }
 
     MPlug pointColorPlug = depNode.findPlug(StukachLocatorNode::aPointColor, false, &status);
@@ -408,11 +454,15 @@ MUserData* StukachDrawOverride::prepareForDraw(
             if (vertIds.length() > 0) {
                 buildVertPoints(meshPath, vertIds, data->badPoints);
             }
+            if (edgeIds.length() > 0) {
+                buildEdgeLines(meshPath, edgeIds, data->badEdgeLines);
+            }
         } catch (...) {
             // Swallow exceptions to prevent Maya crash
             data->faceVerts.clear();
             data->faceEdges.clear();
             data->badPoints.clear();
+            data->badEdgeLines.clear();
         }
     }
 
@@ -435,6 +485,7 @@ void StukachDrawOverride::addUIDrawables(
     if (stukachData->faceVerts.length() == 0 &&
         stukachData->faceEdges.length() == 0 &&
         stukachData->badPoints.length() == 0 &&
+        stukachData->badEdgeLines.length() == 0 &&
         stukachData->bboxEdges.length() == 0) return;
 
     drawManager.beginDrawable(MUIDrawManager::kNonSelectable);
@@ -450,6 +501,14 @@ void StukachDrawOverride::addUIDrawables(
     if (stukachData->faceEdges.length() > 0) {
         drawManager.setColor(stukachData->edgeColor);
         drawManager.mesh(MUIDrawManager::kLines, stukachData->faceEdges);
+    }
+
+    // Draw bad EDGES as thick highlight lines (non_manifold / boundary /
+    // zero_length — rules whose components are edges, not faces)
+    if (stukachData->badEdgeLines.length() > 0) {
+        drawManager.setColor(stukachData->edgeHighlightColor);
+        drawManager.setLineWidth(3.0f);
+        drawManager.mesh(MUIDrawManager::kLines, stukachData->badEdgeLines);
     }
 
     // Draw bad vertices (yellow points)

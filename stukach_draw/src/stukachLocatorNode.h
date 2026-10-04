@@ -49,6 +49,10 @@ public:
     static MObject aEdgeColorG;
     static MObject aEdgeColorB;
     static MObject aEdgeColor;
+    static MObject aEdgeHighlightColorR;
+    static MObject aEdgeHighlightColorG;
+    static MObject aEdgeHighlightColorB;
+    static MObject aEdgeHighlightColor;
 
     static MObject aPointColorR;
     static MObject aPointColorG;
