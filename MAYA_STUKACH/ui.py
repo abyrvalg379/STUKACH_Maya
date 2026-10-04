@@ -2314,6 +2314,12 @@ def launch() -> StukachPanel:
     except Exception:
         pass
     _cleanup_dock_leftovers()
+    # bring back the overlay saved at the last stop() (panel close removes
+    # the tint from the viewport; reopening restores it without a new RUN)
+    try:
+        _overlay.restore(getattr(_manager.MayaCheck, "_overlay_snapshot", []))
+    except Exception:
+        pass
     # Hot-reload (shelf button) purges the modules, so _panel_instance may
     # point nowhere while old panels still exist — kill them by object name.
     try:
@@ -2385,3 +2391,9 @@ def close() -> None:
             pass
         _panel_instance = None
     _cleanup_dock_leftovers()
+    # bring back the overlay saved at the last stop() (panel close removes
+    # the tint from the viewport; reopening restores it without a new RUN)
+    try:
+        _overlay.restore(getattr(_manager.MayaCheck, "_overlay_snapshot", []))
+    except Exception:
+        pass

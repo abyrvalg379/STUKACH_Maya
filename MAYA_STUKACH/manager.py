@@ -295,17 +295,22 @@ class MayaCheck:
         cls.refresh_objects()
         cls.run_all()
 
+    # Last overlay state, captured at stop() and restored at panel launch —
+    # closing the tool removes the viewport tint, reopening brings it back
+    _overlay_snapshot = []
+
     @classmethod
     def stop(cls) -> None:
         cls._running = False
         cls._val_queue = []
         cls._clear_stukach_selection()
         cls._remove_jobs()
+        # remember the overlay so the next launch can restore it (live
+        # 2026-10-04: closing the panel must REMOVE the tint, reopening
+        # must bring it back)
+        cls._overlay_snapshot = _overlay.capture()
         cls.objects.clear()
-        # VP2 locators stay ALIVE across panel restarts: they carry the last
-        # results and keep drawing (a restart must not wipe the overlay —
-        # live report 2026-10-04). The Viewport toggle remains the user's
-        # on/off switch; the next RUN refreshes the data.
+        _overlay.clear()
 
     @classmethod
     def set_check_enabled(cls, key: str, enabled: bool) -> None:

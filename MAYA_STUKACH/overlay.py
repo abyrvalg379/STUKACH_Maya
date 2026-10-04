@@ -358,6 +358,54 @@ def create() -> None:
     _ensure_layer(LAYER_WARNINGS, _COLOR_WARNINGS)
 
 
+def capture() -> list:
+    """Snapshot every stukachLocator's data + colors (stop() saves this so
+    the next launch() can restore the tint without a new RUN)."""
+    snap = []
+    for loc in (cmds.ls(_LOCATOR_PREFIX + "*", type="stukachLocator") or []):
+        try:
+            snap.append({
+                "name": loc,
+                "badFaces": cmds.getAttr(loc + ".badFaces") or "",
+                "badEdges": cmds.getAttr(loc + ".badEdges") or "",
+                "badVerts": cmds.getAttr(loc + ".badVerts") or "",
+                "faceColor": cmds.getAttr(loc + ".faceColor") or [1.0, 0.15, 0.15],
+                "edgeColor": cmds.getAttr(loc + ".edgeHighlightColor") or [0.02, 1.0, 0.02],
+                "pointColor": cmds.getAttr(loc + ".pointColor") or [1.0, 1.0, 0.0],
+                "inputMesh": (cmds.listConnections(loc + ".inputMesh", shapes=True,
+                                                   source=True) or [None])[0],
+            })
+        except Exception:
+            continue
+    return snap
+
+
+def restore(snapshot: list) -> None:
+    """Recreate locators from a stop() snapshot (undo-proof creation)."""
+    for item in snapshot or []:
+        name = item.get("name")
+        if not name or cmds.objExists(name):
+            continue   # still alive — keep its current state
+        try:
+            cmds.undoInfo(stateWithoutFlush=False)
+            loc = cmds.createNode("stukachLocator", name=name, skipSelect=True)
+            mesh = item.get("inputMesh")
+            if mesh and cmds.objExists(mesh):
+                cmds.connectAttr(mesh + ".worldMesh[0]", loc + ".inputMesh",
+                                 force=True)
+            cmds.setAttr(loc + ".badFaces", item["badFaces"], type="string")
+            cmds.setAttr(loc + ".badEdges", item["badEdges"], type="string")
+            cmds.setAttr(loc + ".badVerts", item["badVerts"], type="string")
+            fc = item["faceColor"]; cmds.setAttr(loc + ".faceColor", fc[0], fc[1], fc[2], type="double3")
+            ec = item["edgeColor"]; cmds.setAttr(loc + ".edgeHighlightColor", ec[0], ec[1], ec[2], type="double3")
+            pc = item["pointColor"]; cmds.setAttr(loc + ".pointColor", pc[0], pc[1], pc[2], type="double3")
+            cmds.setAttr(loc + ".drawEnabled", True)
+            cmds.undoInfo(stateWithoutFlush=True)
+        except Exception:
+            cmds.undoInfo(stateWithoutFlush=True)
+            continue
+
+
 def clear() -> None:
     """Tear everything down: restore vertex colours, delete layers, remove VP2 locators."""
     restore_colors()
