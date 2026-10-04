@@ -211,13 +211,6 @@ def _vp2_update(objects: Dict[str, object], active_check: Optional[str] = None) 
     for t in objects.keys():
         base = t.split("|")[-1].replace(":", "_")
         live_names.add(_LOCATOR_PREFIX + base)
-    for rule in ("ngons", "zero_area", "lamina", "z_fighting", "starlike",
-                 "triangles", "missing_uvs", "uv_overlap", "uv_udim_bounds",
-                 "uv_material_udim", "uv_micro_shell", "non_manifold",
-                 "boundary_edges", "zero_length_edges", "duplicate_verts",
-                 "isolated_verts", "poles"):
-        live_names.add(_LOCATOR_PREFIX + base if False else "")
-    live_names.discard("")
     for loc in (cmds.ls(_LOCATOR_PREFIX + "*", type="stukachLocator") or []):
         short = loc.split("|")[-1]
         # keep "<obj>" legacy nodes and "<obj>__<rule>" per-rule nodes
@@ -235,55 +228,55 @@ def _vp2_update(objects: Dict[str, object], active_check: Optional[str] = None) 
                 cmds.undoInfo(stateWithoutFlush=True)
                 pass
 
-        # ── one locator PER RULE: each rule paints its own components in its
-        # own panel color (single-color-per-node architecture; a shared
-        # locator forced one color over all rules)
-        face_rules = ("ngons", "zero_area", "lamina", "z_fighting", "starlike",
-                      "triangles", "missing_uvs", "uv_overlap",
-                      "uv_udim_bounds", "uv_material_udim", "uv_micro_shell")
-        edge_rules = ("non_manifold", "boundary_edges", "zero_length_edges")
-        point_rules = ("duplicate_verts", "isolated_verts", "poles")
+    # ── one locator PER RULE: each rule paints its own components in its
+    # own panel color (single-color-per-node architecture; a shared
+    # locator forced one color over all rules)
+    face_rules = ("ngons", "zero_area", "lamina", "z_fighting", "starlike",
+                  "triangles", "missing_uvs", "uv_overlap",
+                  "uv_udim_bounds", "uv_material_udim", "uv_micro_shell")
+    edge_rules = ("non_manifold", "boundary_edges", "zero_length_edges")
+    point_rules = ("duplicate_verts", "isolated_verts", "poles")
 
-        def _rule_components(checker):
-            faces, edges, verts = [], [], []
-            for comp in checker.bad_components:
-                if ".f[" in comp:
-                    faces.append(comp)
-                elif ".e[" in comp:
-                    edges.append(comp)
-                elif ".vtx[" in comp:
-                    verts.append(comp)
-            return faces, edges, verts
+    def _rule_components(checker):
+        faces, edges, verts = [], [], []
+        for comp in checker.bad_components:
+            if ".f[" in comp:
+                faces.append(comp)
+            elif ".e[" in comp:
+                edges.append(comp)
+            elif ".vtx[" in comp:
+                verts.append(comp)
+        return faces, edges, verts
 
-        for transform, mco in objects.items():
-            if not cmds.objExists(transform):
+    for transform, mco in objects.items():
+        if not cmds.objExists(transform):
+            continue
+        shape = cmds.listRelatives(transform, shapes=True, type="mesh",
+                                   fullPath=True)
+        if not shape:
+            continue
+
+        for rule in face_rules + edge_rules + point_rules:
+            if not _mc_enabled(rule):
                 continue
-            shape = cmds.listRelatives(transform, shapes=True, type="mesh",
-                                       fullPath=True)
-            if not shape:
+            checker = mco.checkers.get(rule)
+            if checker is None or checker.count == 0:
+                continue
+            faces, edges, verts = _rule_components(checker)
+            if not (faces or edges or verts):
                 continue
 
-            for rule in face_rules + edge_rules + point_rules:
-                if not _mc_enabled(rule):
-                    continue
-                checker = mco.checkers.get(rule)
-                if checker is None or checker.count == 0:
-                    continue
-                faces, edges, verts = _rule_components(checker)
-                if not (faces or edges or verts):
-                    continue
-
-                loc = _ensure_rule_locator(transform, rule, shape[0])
-                if not loc or not cmds.objExists(loc):
-                    continue
-                r, g, b = _hex_to_rgb(_CHECK_OVERLAY_COLORS.get(rule, "#FF00FF"))
-                cmds.setAttr(loc + ".badFaces", _serialize_ids(faces, "f"), type="string")
-                cmds.setAttr(loc + ".badEdges", _serialize_ids(edges, "e"), type="string")
-                cmds.setAttr(loc + ".badVerts", _serialize_ids(verts, "vtx"), type="string")
-                cmds.setAttr(loc + ".faceColor", r, g, b, type="double3")
-                cmds.setAttr(loc + ".edgeHighlightColor", r, g, b, type="double3")
-                cmds.setAttr(loc + ".pointColor", r, g, b, type="double3")
-                cmds.setAttr(loc + ".drawEnabled", True)
+            loc = _ensure_rule_locator(transform, rule, shape[0])
+            if not loc or not cmds.objExists(loc):
+                continue
+            r, g, b = _hex_to_rgb(_CHECK_OVERLAY_COLORS.get(rule, "#FF00FF"))
+            cmds.setAttr(loc + ".badFaces", _serialize_ids(faces, "f"), type="string")
+            cmds.setAttr(loc + ".badEdges", _serialize_ids(edges, "e"), type="string")
+            cmds.setAttr(loc + ".badVerts", _serialize_ids(verts, "vtx"), type="string")
+            cmds.setAttr(loc + ".faceColor", r, g, b, type="double3")
+            cmds.setAttr(loc + ".edgeHighlightColor", r, g, b, type="double3")
+            cmds.setAttr(loc + ".pointColor", r, g, b, type="double3")
+            cmds.setAttr(loc + ".drawEnabled", True)
 
 def _locator_color(mco, active_check: Optional[str]) -> tuple:
     """Resolve overlay color for one object: user override → Blender default → severity."""

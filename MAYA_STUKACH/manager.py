@@ -302,7 +302,10 @@ class MayaCheck:
         cls._clear_stukach_selection()
         cls._remove_jobs()
         cls.objects.clear()
-        _overlay.clear()
+        # VP2 locators stay ALIVE across panel restarts: they carry the last
+        # results and keep drawing (a restart must not wipe the overlay —
+        # live report 2026-10-04). The Viewport toggle remains the user's
+        # on/off switch; the next RUN refreshes the data.
 
     @classmethod
     def set_check_enabled(cls, key: str, enabled: bool) -> None:
