@@ -143,11 +143,17 @@ def _ensure_locator(transform: str, rule: str = "") -> Optional[str]:
         # Maya switched the selection to the locator and the user's
         # selection "dropped a second later" (second click found the
         # locator already existing and was stable)
+        # undoInfo(swf=False/True): the node lives OUTSIDE the undo queue —
+        # a user Ctrl+Z must NOT delete the overlay (live 2026-10-04: undo
+        # wiped all locators and the viewport went dark)
+        cmds.undoInfo(stateWithoutFlush=False)
         loc = cmds.createNode("stukachLocator", name=loc_name,
                               skipSelect=True)
         cmds.connectAttr("%s.worldMesh[0]" % shape, "%s.inputMesh" % loc)
+        cmds.undoInfo(stateWithoutFlush=True)
         return loc
     except Exception as e:
+        cmds.undoInfo(stateWithoutFlush=True)
         print("[STUKACH] VP2 locator create error: %s" % e)
         return None
 
@@ -159,10 +165,15 @@ def _ensure_rule_locator(transform: str, rule: str, shape_full: str) -> Optional
     if cmds.objExists(loc_name):
         return loc_name
     try:
+        # outside the undo queue (see _ensure_locator) — Ctrl+Z must not
+        # delete the overlay
+        cmds.undoInfo(stateWithoutFlush=False)
         loc = cmds.createNode("stukachLocator", name=loc_name, skipSelect=True)
         cmds.connectAttr("%s.worldMesh[0]" % shape_full, "%s.inputMesh" % loc)
+        cmds.undoInfo(stateWithoutFlush=True)
         return loc
     except Exception as e:
+        cmds.undoInfo(stateWithoutFlush=True)
         print("[STUKACH] VP2 per-rule locator create error: %s" % e)
         return None
 
@@ -217,8 +228,11 @@ def _vp2_update(objects: Dict[str, object], active_check: Optional[str] = None) 
             keep = short
         if keep not in live_names:
             try:
+                cmds.undoInfo(stateWithoutFlush=False)
                 cmds.delete(loc)
+                cmds.undoInfo(stateWithoutFlush=True)
             except Exception:
+                cmds.undoInfo(stateWithoutFlush=True)
                 pass
 
         # ── one locator PER RULE: each rule paints its own components in its
